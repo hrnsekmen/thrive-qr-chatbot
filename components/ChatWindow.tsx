@@ -109,8 +109,37 @@ export default function ChatWindow() {
     );
   }
 
+  // Keep list pinned appropriately when the virtual keyboard shows/hides
+  useEffect(() => {
+    const vv = (window as any).visualViewport as VisualViewport | undefined;
+    if (!vv) return;
+    const onResize = () => {
+      // After viewport changes, keep the list anchored
+      requestAnimationFrame(() => {
+        scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
+      });
+    };
+    vv.addEventListener('resize', onResize);
+    vv.addEventListener('scroll', onResize);
+    return () => {
+      vv.removeEventListener('resize', onResize);
+      vv.removeEventListener('scroll', onResize);
+    };
+  }, []);
+
+  function handleFocus() {
+    document.documentElement.classList.add('keyboard-open');
+  }
+  function handleBlur() {
+    document.documentElement.classList.remove('keyboard-open');
+    // ensure state snaps back
+    requestAnimationFrame(() => {
+      scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
+    });
+  }
+
   return (
-    <div className="relative flex flex-col h-full pb-[env(safe-area-inset-bottom)]">
+    <div className="relative flex flex-col h-full pb-safe">
       {/* Ambient background effects */}
       <div aria-hidden className="pointer-events-none absolute inset-0 -z-10 overflow-hidden">
         <div className="absolute -top-24 -left-24 h-80 w-80 rounded-full bg-primary/30 blur-3xl animate-pulse-slow" />
@@ -146,6 +175,8 @@ export default function ChatWindow() {
           value={input}
           onChange={(e) => setInput(e.target.value)}
           placeholder="Type your message…"
+          onFocus={handleFocus}
+          onBlur={handleBlur}
           className="flex-1 min-w-0 h-12 md:h-12 rounded-xl bg-[#141415] border border-white/10 px-4 py-0 outline-none appearance-none placeholder:text-white/60 text-[16px] leading-6 focus:ring-2 focus:ring-primary/30 touch-manipulation"
           aria-label="Message"
         />

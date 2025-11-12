@@ -19,6 +19,13 @@ body {
   color: var(--foreground);
 }
 
+.pb-safe {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+html.keyboard-open .pb-safe {
+  padding-bottom: 0 !important;
+}
+
 .card {
   @apply bg-[#1b1b1c] border border-white/10 shadow-elevated rounded-2xl;
 }
