@@ -91,14 +91,11 @@ html.keyboard-open .pb-safe {
 
 /* Fixed-screen helpers for mobile safe UI (prevents tiny page scroll) */
 .h-screen-fixed {
-  height: 100vh;
-  height: 100svh;
-  height: 100dvh;
+  height: var(--app-height, 100dvh);
+  min-height: var(--app-height, 100dvh);
 }
 .h-chat {
-  height: calc(100vh - 3.5rem);
-  height: calc(100svh - 3.5rem);
-  height: calc(100dvh - 3.5rem);
+  height: calc(var(--app-height, 100dvh) - 3.5rem);
 }
 
 /* Themed scrollbar (applied only where .themed-scroll is used) */
