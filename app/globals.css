@@ -9,6 +9,9 @@
 
 html, body {
   height: 100%;
+  overflow: hidden; /* lock page-level scroll; only inner containers can scroll */
+  overscroll-behavior: none;
+  -webkit-text-size-adjust: 100%;
 }
 
 body {
@@ -110,6 +113,11 @@ body {
 }
 .themed-scroll::-webkit-scrollbar-corner {
   background: transparent;
+}
+
+/* Utilities */
+.touch-manipulation {
+  touch-action: manipulation;
 }
 
 

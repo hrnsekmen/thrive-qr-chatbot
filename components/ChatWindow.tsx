@@ -146,13 +146,13 @@ export default function ChatWindow() {
           value={input}
           onChange={(e) => setInput(e.target.value)}
           placeholder="Type your message…"
-          className="flex-1 min-w-0 h-12 md:h-12 rounded-xl bg-[#141415] border border-white/10 px-4 py-0 outline-none appearance-none placeholder:text-white/50 text-[15px] leading-6 focus:ring-2 focus:ring-primary/30"
+          className="flex-1 min-w-0 h-12 md:h-12 rounded-xl bg-[#141415] border border-white/10 px-4 py-0 outline-none appearance-none placeholder:text-white/60 text-[16px] leading-6 focus:ring-2 focus:ring-primary/30 touch-manipulation"
           aria-label="Message"
         />
         <button
           type="submit"
           disabled={sending || !input.trim()}
-          className="btn-primary h-12 md:h-12 inline-flex items-center justify-center px-4 md:px-5 disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
+          className="btn-primary h-12 md:h-12 inline-flex items-center justify-center px-4 md:px-5 disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0 touch-manipulation"
           aria-label="Send"
         >
           Send

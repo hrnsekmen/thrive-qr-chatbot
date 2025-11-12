@@ -65,7 +65,7 @@ export default function WelcomeForm() {
               placeholder="e.g., John Doe"
               autoFocus
               autoComplete="name"
-              className="w-full rounded-xl bg-[#141415] border border-white/10 pl-11 pr-4 py-3 outline-none focus:ring-2 focus:ring-primary/40 caret-primary text-[15px] leading-6"
+              className="w-full rounded-xl bg-[#141415] border border-white/10 pl-11 pr-4 py-3 outline-none focus:ring-2 focus:ring-primary/40 caret-primary text-[16px] leading-6 appearance-none"
             />
           </div>
         </div>
@@ -86,7 +86,7 @@ export default function WelcomeForm() {
               onChange={(e) => setEmail(e.target.value)}
               placeholder="example@domain.com"
               autoComplete="email"
-              className="w-full rounded-xl bg-[#141415] border border-white/10 pl-11 pr-4 py-3 outline-none focus:ring-2 focus:ring-accent/40 caret-accent text-[15px] leading-6"
+              className="w-full rounded-xl bg-[#141415] border border-white/10 pl-11 pr-4 py-3 outline-none focus:ring-2 focus:ring-accent/40 caret-accent text-[16px] leading-6 appearance-none"
               aria-invalid={!!email && !validateEmail(email)}
             />
           </div>
