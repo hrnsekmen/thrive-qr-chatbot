@@ -110,27 +110,40 @@ export default function ChatWindow() {
   }
 
   // Keep list pinned appropriately when the virtual keyboard shows/hides
+  const keyboardOpen = useRef(false);
+  const lastViewportHeight = useRef<number | null>(null);
   useEffect(() => {
     const vv = (window as any).visualViewport as VisualViewport | undefined;
     if (!vv) return;
     const onResize = () => {
-      // After viewport changes, keep the list anchored
+      // Only react while keyboard is open, and ignore tiny jitters
+      if (!keyboardOpen.current) {
+        lastViewportHeight.current = vv.height;
+        return;
+      }
+      const current = vv.height;
+      const prev = lastViewportHeight.current;
+      lastViewportHeight.current = current;
+      if (prev !== null && Math.abs(current - prev) < 8) {
+        return;
+      }
       requestAnimationFrame(() => {
         scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
       });
     };
+    lastViewportHeight.current = vv.height;
     vv.addEventListener('resize', onResize);
-    vv.addEventListener('scroll', onResize);
     return () => {
       vv.removeEventListener('resize', onResize);
-      vv.removeEventListener('scroll', onResize);
     };
   }, []);
 
   function handleFocus() {
+    keyboardOpen.current = true;
     document.documentElement.classList.add('keyboard-open');
   }
   function handleBlur() {
+    keyboardOpen.current = false;
     document.documentElement.classList.remove('keyboard-open');
     // ensure state snaps back
     requestAnimationFrame(() => {

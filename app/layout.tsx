@@ -1,7 +1,6 @@
 import type { Metadata, Viewport } from 'next';
 import './globals.css';
 import { Inter } from 'next/font/google';
-import ViewportHack from '@/components/ViewportHack';
 
 const inter = Inter({ subsets: ['latin'] });
 
@@ -23,7 +22,6 @@ export default function RootLayout(props: { children: React.ReactNode }) {
   return (
     <html lang="en">
       <body className={inter.className}>
-        <ViewportHack />
         <div className="min-h-screen">{props.children}</div>
       </body>
     </html>
