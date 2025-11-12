@@ -110,7 +110,7 @@ export default function ChatWindow() {
   }
 
   return (
-    <div className="relative flex flex-col h-full">
+    <div className="relative flex flex-col h-full pb-[env(safe-area-inset-bottom)]">
       {/* Ambient background effects */}
       <div aria-hidden className="pointer-events-none absolute inset-0 -z-10 overflow-hidden">
         <div className="absolute -top-24 -left-24 h-80 w-80 rounded-full bg-primary/30 blur-3xl animate-pulse-slow" />
@@ -140,18 +140,20 @@ export default function ChatWindow() {
 
       <form
         onSubmit={handleSend}
-        className="px-4 md:px-6 py-4 border-t border-white/10 bg-[#121213] flex gap-3"
+        className="px-4 md:px-6 py-3 sm:py-4 border-t border-white/10 bg-[#121213] flex items-center gap-2 sm:gap-3"
       >
         <input
           value={input}
           onChange={(e) => setInput(e.target.value)}
           placeholder="Type your message…"
-          className="flex-1 rounded-xl bg-[#141415] border border-white/10 px-4 py-3 outline-none focus:ring-2 focus:ring-primary/40"
+          className="flex-1 min-w-0 h-12 md:h-12 rounded-xl bg-[#141415] border border-white/10 px-4 py-0 outline-none appearance-none placeholder:text-white/50 text-[15px] leading-6 focus:ring-2 focus:ring-primary/30"
+          aria-label="Message"
         />
         <button
           type="submit"
           disabled={sending || !input.trim()}
-          className="btn-primary px-4 md:px-5 py-3 disabled:opacity-50 disabled:cursor-not-allowed"
+          className="btn-primary h-12 md:h-12 inline-flex items-center justify-center px-4 md:px-5 disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
+          aria-label="Send"
         >
           Send
         </button>
