@@ -5,8 +5,11 @@ import { Inter } from 'next/font/google';
 const inter = Inter({ subsets: ['latin'] });
 
 export const metadata: Metadata = {
-  title: 'Thrive QR Chat',
-  description: 'Welcome and chat experience launched via QR'
+  title: 'VARCA Chat',
+  description: 'Welcome and chat experience launched via QR',
+  icons: {
+    icon: '/favicon.png'
+  }
 };
 
 export const viewport: Viewport = {
