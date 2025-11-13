@@ -3,6 +3,7 @@
 import { useEffect, useId, useMemo, useState } from 'react';
 import { loadSession, saveSession, UserSession } from '@/lib/session';
 import { getLocationWithAddress } from '@/lib/geolocation';
+import { getActivityIdFromUrl } from '@/lib/ws';
 import { useRouter } from 'next/navigation';
 
 function validateEmail(email: string): boolean {
@@ -21,8 +22,8 @@ export default function WelcomeForm() {
 
   useEffect(() => {
     if (existing) {
-      const search = typeof window !== 'undefined' ? window.location.search : '';
-      router.replace(`/chat${search}`);
+      const act = getActivityIdFromUrl();
+      router.replace(`/chat?activity=${encodeURIComponent(act)}`);
     }
   }, [existing, router]);
 
@@ -54,8 +55,8 @@ export default function WelcomeForm() {
       location
     };
     saveSession(session);
-    const search = typeof window !== 'undefined' ? window.location.search : '';
-    router.replace(`/chat${search}`);
+    const act = getActivityIdFromUrl();
+    router.replace(`/chat?activity=${encodeURIComponent(act)}`);
   }
 
   return (
