@@ -20,7 +20,8 @@ export default function WelcomeForm() {
 
   useEffect(() => {
     if (existing) {
-      router.replace('/chat');
+      const search = typeof window !== 'undefined' ? window.location.search : '';
+      router.replace(`/chat${search}`);
     }
   }, [existing, router]);
 
@@ -30,6 +31,14 @@ export default function WelcomeForm() {
     e.preventDefault();
     if (disabled) return;
     setSubmitting(true);
+    // persist activity id for later use as fallback
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const act = params.get('activity');
+      if (act) {
+        window.localStorage.setItem('activity_id', act);
+      }
+    } catch {}
     const location = await getLocationWithAddress(email);
     const session: UserSession = {
       name: name.trim(),
@@ -38,7 +47,8 @@ export default function WelcomeForm() {
       location: location ?? undefined
     };
     saveSession(session);
-    router.replace('/chat');
+    const search = typeof window !== 'undefined' ? window.location.search : '';
+    router.replace(`/chat${search}`);
   }
 
   return (
