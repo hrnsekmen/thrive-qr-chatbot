@@ -19,8 +19,11 @@ export async function GET(
   // Use the Edge runtime's WebSocketPair
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const pair = new (globalThis as any).WebSocketPair();
-  const client = pair[0] as WebSocket;
-  const server = pair[1] as WebSocket;
+  // Cast to any to satisfy TS - Edge runtime provides accept() on server
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const client = pair[0] as any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const server = pair[1] as any;
 
   server.accept();
 
