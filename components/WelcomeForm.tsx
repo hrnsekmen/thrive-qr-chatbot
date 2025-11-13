@@ -17,6 +17,7 @@ export default function WelcomeForm() {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [locationError, setLocationError] = useState<string | null>(null);
 
   useEffect(() => {
     if (existing) {
@@ -31,6 +32,7 @@ export default function WelcomeForm() {
     e.preventDefault();
     if (disabled) return;
     setSubmitting(true);
+    setLocationError(null);
     // persist activity id for later use as fallback
     try {
       const params = new URLSearchParams(window.location.search);
@@ -40,11 +42,16 @@ export default function WelcomeForm() {
       }
     } catch {}
     const location = await getLocationWithAddress(email);
+    if (!location) {
+      setSubmitting(false);
+      setLocationError('Location permission is required to continue.');
+      return;
+    }
     const session: UserSession = {
       name: name.trim(),
       email: email.trim(),
       createdAt: Date.now(),
-      location: location ?? undefined
+      location
     };
     saveSession(session);
     const search = typeof window !== 'undefined' ? window.location.search : '';
@@ -112,6 +119,9 @@ export default function WelcomeForm() {
         </button>
 
         <p className="text-xs text-white/60 text-center">We will collect your location.</p>
+        {locationError && (
+          <p className="text-xs text-red-400 text-center">{locationError}</p>
+        )}
       </form>
  
     </div>
