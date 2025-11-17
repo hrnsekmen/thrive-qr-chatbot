@@ -9,6 +9,11 @@ type Message = {
   id: string;
   role: "assistant" | "user";
   content: string;
+  attachment?: {
+    type: "image" | "video";
+    url: string;
+    fileName: string;
+  };
 };
 
 type MessageBubbleProps = {
@@ -33,6 +38,27 @@ const MessageBubble = memo(
           }`}
         >
           <p className="whitespace-pre-wrap">{props.msg.content}</p>
+          {props.msg.attachment && (
+            <div className="mt-2 space-y-1">
+              {props.msg.attachment.type === "image" && (
+                <img
+                  src={props.msg.attachment.url}
+                  alt={props.msg.attachment.fileName || "Captured image"}
+                  className="max-w-full rounded-xl border border-white/10"
+                />
+              )}
+              {props.msg.attachment.type === "video" && (
+                <video
+                  controls
+                  src={props.msg.attachment.url}
+                  className="max-w-full rounded-xl border border-white/10"
+                />
+              )}
+              <p className="text-[11px] text-white/60 truncate">
+                {props.msg.attachment.fileName}
+              </p>
+            </div>
+          )}
         </div>
       </div>
     );
@@ -60,6 +86,10 @@ export default function ChatWindow() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
+  const [pendingAttachment, setPendingAttachment] = useState<
+    Message["attachment"] | null
+  >(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const streamMsgIdRef = useRef<string | null>(null);
   const tokenQueueRef = useRef<string[]>([]);
   const flushTimerRef = useRef<number | null>(null);
@@ -117,17 +147,29 @@ export default function ChatWindow() {
   async function handleSend(e: React.FormEvent) {
     e.preventDefault();
     const text = input.trim();
-    if (!text) return;
+    if (!text && !pendingAttachment) return;
     if (!isWSOpen()) {
       // bağlantı yokken gönderimi engelle
       return;
     }
 
     setInput("");
+    const attachmentToSend = pendingAttachment;
+    if (attachmentToSend) {
+      setPendingAttachment(null);
+    }
+
     const userMsg: Message = {
       id: crypto.randomUUID(),
       role: "user",
-      content: text,
+      content:
+        text ||
+        (attachmentToSend
+          ? attachmentToSend.type === "image"
+            ? "Photo"
+            : "Video"
+          : ""),
+      attachment: attachmentToSend ?? undefined,
     };
     setMessages((m) => [...m, userMsg]);
 
@@ -143,17 +185,58 @@ export default function ChatWindow() {
     // eslint-disable-next-line no-console
     console.log("WS send payload:", payload, "readyState:", ws.readyState);
 
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify(payload));
-      setSending(true);
-    } else {
-      ws.onopen = () => {
-        // eslint-disable-next-line no-console
-        console.log("WS onopen -> sending payload now");
+    // Şu an için görseller sadece UI tarafında demo olarak gösteriliyor.
+    // Metin yoksa backend'e herhangi bir mesaj göndermiyoruz.
+    if (text) {
+      if (ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify(payload));
         setSending(true);
-      };
+      } else {
+        ws.onopen = () => {
+          // eslint-disable-next-line no-console
+          console.log("WS onopen -> sending payload now");
+          ws.send(JSON.stringify(payload));
+          setSending(true);
+        };
+      }
     }
+  }
+
+  function handleCameraClick() {
+    fileInputRef.current?.click();
+  }
+
+  function handleMediaSelected(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const isImage = file.type.startsWith("image/");
+    const isVideo = file.type.startsWith("video/");
+    if (!isImage && !isVideo) {
+      e.target.value = "";
+      return;
+    }
+
+    // Önceki pending görsel varsa onun URL'sini serbest bırak
+    if (pendingAttachment?.url) {
+      try {
+        URL.revokeObjectURL(pendingAttachment.url);
+      } catch {
+        // ignore
+      }
+    }
+
+    const objectUrl = URL.createObjectURL(file);
+    const mediaType = isImage ? "image" : "video";
+
+    setPendingAttachment({
+      type: mediaType,
+      url: objectUrl,
+      fileName: file.name,
+    });
+
+    // Dosya sadece pending state'te tutuluyor, şu an için backend'e gönderim yok.
+    e.target.value = "";
   }
 
   if (!session) {
@@ -353,25 +436,115 @@ export default function ChatWindow() {
 
       <form
         onSubmit={handleSend}
-        className="px-4 md:px-6 py-3 sm:py-4 border-t border-white/10 bg-[#121213] flex items-center gap-2 sm:gap-3"
+        className="px-4 md:px-6 py-3 sm:py-4 border-t border-white/10 bg-[#121213] space-y-2"
       >
-        <input
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          placeholder="Type your message…"
-          onFocus={handleFocus}
-          onBlur={handleBlur}
-          className="flex-1 min-w-0 h-12 md:h-12 rounded-xl bg-[#141415] border border-white/10 px-4 py-0 outline-none appearance-none placeholder:text-white/60 text-[16px] leading-6 focus:ring-2 focus:ring-primary/30 touch-manipulation"
-          aria-label="Message"
-        />
-        <button
-          type="submit"
-          disabled={sending || !input.trim() || !connected}
-          className="btn-primary h-12 md:h-12 inline-flex items-center justify-center px-4 md:px-5 disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0 touch-manipulation"
-          aria-label="Send"
-        >
-          Send
-        </button>
+        {pendingAttachment && (
+          <div className="flex items-center gap-3">
+            <div className="w-16 h-16 rounded-xl overflow-hidden border border-white/15 bg-black/40 flex items-center justify-center">
+              {pendingAttachment.type === "image" && (
+                <img
+                  src={pendingAttachment.url}
+                  alt={pendingAttachment.fileName || "Selected image"}
+                  className="max-h-full max-w-full object-cover"
+                />
+              )}
+              {pendingAttachment.type === "video" && (
+                <video
+                  src={pendingAttachment.url}
+                  className="max-h-full max-w-full object-cover"
+                  muted
+                />
+              )}
+            </div>
+            <div className="flex-1 min-w-0 flex items-center justify-between gap-2">
+              <p className="text-xs text-white/70 truncate">
+                {pendingAttachment.fileName}
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  if (pendingAttachment?.url) {
+                    try {
+                      URL.revokeObjectURL(pendingAttachment.url);
+                    } catch {
+                      // ignore
+                    }
+                  }
+                  setPendingAttachment(null);
+                }}
+                className="text-[11px] text-white/60 hover:text-white/90 px-2 py-1 rounded-full border border-white/20"
+              >
+                Remove
+              </button>
+            </div>
+          </div>
+        )}
+        <div className="flex items-center gap-2 sm:gap-3">
+          <button
+            type="button"
+            onClick={handleCameraClick}
+            className="h-10 w-10 md:h-11 md:w-11 flex items-center justify-center rounded-full bg-[#141415] border border-white/15 text-white/80 hover:bg-white/5 transition-colors flex-shrink-0 touch-manipulation"
+            aria-label="Open camera"
+          >
+            <svg
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              aria-hidden
+            >
+              <rect
+                x="3.5"
+                y="6.5"
+                width="17"
+                height="13"
+                rx="2"
+                stroke="currentColor"
+                strokeWidth="1.5"
+              />
+              <path
+                d="M9 6.5L10.2 4.8C10.6 4.2 11.3 3.8 12 3.8C12.7 3.8 13.4 4.2 13.8 4.8L15 6.5"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+              />
+              <circle
+                cx="12"
+                cy="13"
+                r="3"
+                stroke="currentColor"
+                strokeWidth="1.5"
+              />
+            </svg>
+          </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*,video/*"
+            capture="environment"
+            className="hidden"
+            onChange={handleMediaSelected}
+          />
+          <input
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            placeholder="Type your message…"
+            onFocus={handleFocus}
+            onBlur={handleBlur}
+            className="flex-1 min-w-0 h-12 md:h-12 rounded-xl bg-[#141415] border border-white/10 px-4 py-0 outline-none appearance-none placeholder:text-white/60 text-[16px] leading-6 focus:ring-2 focus:ring-primary/30 touch-manipulation"
+            aria-label="Message"
+          />
+          <button
+            type="submit"
+            disabled={
+              sending || (!input.trim() && !pendingAttachment) || !connected
+            }
+            className="btn-primary h-12 md:h-12 inline-flex items-center justify-center px-4 md:px-5 disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0 touch-manipulation"
+            aria-label="Send"
+          >
+            Send
+          </button>
+        </div>
       </form>
     </div>
   );
