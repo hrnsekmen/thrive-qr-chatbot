@@ -24,7 +24,9 @@ export async function checkActivityValidity(
       return "invalid";
     }
     const data: any = await res.json();
-    const status = data?.status;
+    // Backend şu an bazı durumlarda "status", bazı durumlarda "detail"
+    // alanını kullanabiliyor; her ikisini de destekle.
+    const status = data?.status ?? data?.detail;
     if (status === "active" || status === "not_active" || status === "invalid") {
       return status;
     }
