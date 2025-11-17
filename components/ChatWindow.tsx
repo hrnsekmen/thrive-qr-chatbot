@@ -125,8 +125,8 @@ export default function ChatWindow() {
       router.replace("/");
       return;
     }
-    const welcome =
-      "Welcome! I’m your on-site concierge. How can I help you today?";
+    const firstName = session.name.split(" ")[0] || session.name;
+    const welcome = `Hey ${firstName}! I’m your on-site concierge. How can I help you today?`;
     setMessages([
       {
         id: "m1",
