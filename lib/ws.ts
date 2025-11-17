@@ -1,4 +1,3 @@
-// Lightweight WebSocket client modeled after ondemand.html logic
 let socket: WebSocket | null = null;
 let retries = 0;
 let cachedClientId: string | null = null;
@@ -16,9 +15,16 @@ const DEFAULT_ACTIVITY_ID =
     (process as any).env?.NEXT_PUBLIC_DEFAULT_ACTIVITY_ID) ||
   "c50274dc-8acb-490d-a809-e94738032862";
 
+// Base domain for the agent/WS server, configurable via env.
+// In development this will default to "agent.thrivelogic.ai".
+// In production you can set NEXT_PUBLIC_AGENT_HOST to "varca.thrivelogic.ai".
+const AGENT_HOST =
+  (typeof process !== "undefined" &&
+    (process as any).env?.NEXT_PUBLIC_AGENT_HOST) ||
+  "agent.thrivelogic.ai";
+
 function getUrl(): string {
-  // Always use the production WS domain as requested
-  const base = "wss://agent.thrivelogic.ai/ws/ondemand";
+  const base = `wss://${AGENT_HOST}/ws/ondemand`;
   return `${base}/${getClientId()}`;
 }
 
