@@ -9,16 +9,10 @@ type Subscriber = {
 };
 const subscribers = new Set<Subscriber>();
 
-// Default activity id to use when URL/localStorage don't provide one
-const DEFAULT_ACTIVITY_ID =
-  (typeof process !== "undefined" &&
-    (process as any).env?.NEXT_PUBLIC_DEFAULT_ACTIVITY_ID) ||
-  "c50274dc-8acb-490d-a809-e94738032862";
-
-// Base domain for the agent/WS server, configurable via env.
+// Base domain for the agent/WS server and HTTP APIs, configurable via env.
 // In development this will default to "agent.thrivelogic.ai".
 // In production you can set NEXT_PUBLIC_AGENT_HOST to "varca.thrivelogic.ai".
-const AGENT_HOST =
+export const AGENT_HOST =
   (typeof process !== "undefined" &&
     (process as any).env?.NEXT_PUBLIC_AGENT_HOST) ||
   "agent.thrivelogic.ai";
@@ -135,22 +129,14 @@ export function getActivityIdFromUrl(): string {
       } catch {}
       return fromUrl;
     }
-    try {
-      const stored = window.localStorage.getItem("activity_id");
-      if (stored && stored.trim()) {
-        return stored;
-      }
-      // Fallback to default if nothing is present
-      try {
-        window.localStorage.setItem("activity_id", DEFAULT_ACTIVITY_ID);
-      } catch {}
-      return DEFAULT_ACTIVITY_ID;
-    } catch {
-      return DEFAULT_ACTIVITY_ID;
+    const stored = window.localStorage.getItem("activity_id");
+    if (stored && stored.trim()) {
+      return stored;
     }
   } catch {
-    return DEFAULT_ACTIVITY_ID;
+    return "";
   }
+  return "";
 }
 
 export function loadOrCreateChatSessionId(): string {
