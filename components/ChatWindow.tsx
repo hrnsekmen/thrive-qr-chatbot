@@ -20,16 +20,6 @@ type Message = {
 
 type PendingAttachment = MessageAttachment & {
   file: File;
-  trimStartSec?: number;
-  trimEndSec?: number;
-};
-
-type TrimState = {
-  file: File;
-  objectUrl: string;
-  duration: number;
-  startSec: number;
-  lengthSec: number;
 };
 
 type MessageBubbleProps = {
@@ -105,10 +95,7 @@ export default function ChatWindow() {
   const [pendingAttachment, setPendingAttachment] =
     useState<PendingAttachment | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const photoInputRef = useRef<HTMLInputElement | null>(null);
   const [isRecording, setIsRecording] = useState(false);
-  const [isVideoPreview, setIsVideoPreview] = useState(false);
-  const [isPhotoCapture, setIsPhotoCapture] = useState(false);
   const [recordingError, setRecordingError] = useState<string | null>(null);
   const recordingVideoRef = useRef<HTMLVideoElement | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
@@ -121,21 +108,6 @@ export default function ChatWindow() {
   const flushCompletePendingRef = useRef(false);
   const [connected, setConnected] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const [isAttachmentMenuOpen, setIsAttachmentMenuOpen] = useState(false);
-  const attachmentMenuRef = useRef<HTMLDivElement | null>(null);
-  const attachmentButtonRef = useRef<HTMLButtonElement | null>(null);
-  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
-  const [trimState, setTrimState] = useState<TrimState | null>(null);
-  const [trimCurrentTime, setTrimCurrentTime] = useState(0);
-  const [trimIsMuted, setTrimIsMuted] = useState(false);
-  const [alertState, setAlertState] = useState<{
-    title?: string;
-    message: string;
-  } | null>(null);
-  const trimTrackRef = useRef<HTMLDivElement | null>(null);
-  const trimDragKindRef = useRef<"start" | "end" | null>(null);
-  const trimVideoRef = useRef<HTMLVideoElement | null>(null);
-  const previewVideoRef = useRef<HTMLVideoElement | null>(null);
   const locationText = useMemo(() => {
     if (!session?.location) return null;
     if (
@@ -216,26 +188,24 @@ export default function ChatWindow() {
       time: string;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       user_meta?: any;
-      trimStartSec?: number;
-      trimEndSec?: number;
     }
   ) {
-    // 1) Metadatayı + mesajı TEXT frame olarak gönder
-    const textPayload = JSON.stringify({
-      ...metadata,
-      media: {
-        type: "video",
-      },
-    });
-    ws.send(textPayload);
-
-    // 2) Videoyu ayrı bir BINARY frame olarak gönder
+    const jsonString = JSON.stringify(metadata);
+    const jsonBytes = new TextEncoder().encode(jsonString);
     const videoBytes = await file.arrayBuffer();
-    ws.send(videoBytes);
-  }
 
-  function openAlert(message: string, title?: string) {
-    setAlertState({ message, title });
+    const totalLength = 4 + jsonBytes.length + videoBytes.byteLength;
+    const buffer = new ArrayBuffer(totalLength);
+    const view = new DataView(buffer);
+
+    // İlk 4 byte: JSON'un uzunluğu (Big Endian)
+    view.setUint32(0, jsonBytes.length, false);
+
+    const byteView = new Uint8Array(buffer);
+    byteView.set(jsonBytes, 4);
+    byteView.set(new Uint8Array(videoBytes), 4 + jsonBytes.length);
+
+    ws.send(buffer);
   }
 
   function stopAndCleanupRecording() {
@@ -251,12 +221,9 @@ export default function ChatWindow() {
     if (videoEl) {
       videoEl.srcObject = null;
     }
-    setIsRecording(false);
-    setIsVideoPreview(false);
-    setIsPhotoCapture(false);
   }
 
-  async function startVideoPreview() {
+  async function startCustomVideoRecording() {
     setRecordingError(null);
     if (
       typeof navigator === "undefined" ||
@@ -270,10 +237,7 @@ export default function ChatWindow() {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: { ideal: "environment" } },
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-        },
+        audio: true,
       });
       mediaStreamRef.current = stream;
 
@@ -287,49 +251,7 @@ export default function ChatWindow() {
         }
       }
 
-      // If there is no audio track, surface a hint to the user
-      const hasAudio = stream.getAudioTracks().length > 0;
-      if (!hasAudio) {
-        setRecordingError(
-          "No microphone audio detected. Please check browser permissions."
-        );
-      } else {
-        setRecordingError(null);
-      }
-      setIsVideoPreview(true);
-      setIsRecording(false);
-    } catch (err) {
-      // eslint-disable-next-line no-console
-      console.error("Camera access failed:", err);
-      stopAndCleanupRecording();
-      setRecordingError("Could not access the camera. Please check permissions.");
-    }
-  }
-
-  async function startCustomVideoRecording() {
-    setRecordingError(null);
-    if (!mediaStreamRef.current) {
-      await startVideoPreview();
-      if (!mediaStreamRef.current) return;
-    }
-
-    try {
-      const stream = mediaStreamRef.current;
-      if (!stream) {
-        setRecordingError("Camera stream is not available.");
-        return;
-      }
-
-      let recorder: MediaRecorder;
-      const preferredMime = "video/webm;codecs=vp8,opus";
-      if (
-        typeof (MediaRecorder as any).isTypeSupported === "function" &&
-        (MediaRecorder as any).isTypeSupported(preferredMime)
-      ) {
-        recorder = new MediaRecorder(stream, { mimeType: preferredMime });
-      } else {
-        recorder = new MediaRecorder(stream);
-      }
+      const recorder = new MediaRecorder(stream);
       mediaRecorderRef.current = recorder;
       recordingChunksRef.current = [];
 
@@ -349,15 +271,12 @@ export default function ChatWindow() {
           return;
         }
 
-        const mimeType =
-          (mediaRecorderRef.current && mediaRecorderRef.current.mimeType) ||
-          "video/webm;codecs=vp8,opus";
-        const blob = new Blob(chunks, { type: mimeType });
+        const blob = new Blob(chunks, { type: "video/webm" });
         const MAX_BYTES = 10 * 1024 * 1024;
         if (blob.size > MAX_BYTES) {
-          openAlert(
-            "Recorded video exceeds the 10MB limit. Please record a shorter or lower-resolution video.",
-            "Video too large"
+          // eslint-disable-next-line no-alert
+          alert(
+            "Recorded video exceeds the 10MB limit. Please record a shorter or lower-resolution video."
           );
           setIsRecording(false);
           return;
@@ -384,9 +303,7 @@ export default function ChatWindow() {
             file,
           };
         });
-        setIsPreviewOpen(true);
         setIsRecording(false);
-        setIsVideoPreview(false);
       };
 
       recorder.start();
@@ -411,107 +328,6 @@ export default function ChatWindow() {
       setIsRecording(false);
       setRecordingError("Could not access the camera. Please check permissions.");
     }
-  }
-
-  async function startPhotoCapture() {
-    setRecordingError(null);
-    if (
-      typeof navigator === "undefined" ||
-      !navigator.mediaDevices ||
-      !navigator.mediaDevices.getUserMedia
-    ) {
-      setRecordingError("Camera access is not supported on this device.");
-      return;
-    }
-
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: "environment" } },
-        audio: false,
-      });
-      mediaStreamRef.current = stream;
-
-      const videoEl = recordingVideoRef.current;
-      if (videoEl) {
-        videoEl.srcObject = stream;
-        try {
-          await videoEl.play();
-        } catch {
-          // ignore
-        }
-      }
-
-      setIsPhotoCapture(true);
-      setIsVideoPreview(false);
-    } catch (err) {
-      // eslint-disable-next-line no-console
-      console.error("Camera access failed:", err);
-      stopAndCleanupRecording();
-      setIsPhotoCapture(false);
-      setRecordingError("Could not access the camera. Please check permissions.");
-    }
-  }
-
-  async function handleCapturePhoto() {
-    const videoEl = recordingVideoRef.current;
-    if (!videoEl) return;
-
-    try {
-      const canvas = document.createElement("canvas");
-      canvas.width = videoEl.videoWidth || 640;
-      canvas.height = videoEl.videoHeight || 480;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) {
-        throw new Error("Canvas not supported");
-      }
-      ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
-
-      const blob = await new Promise<Blob>((resolve, reject) => {
-        canvas.toBlob(
-          (b) => {
-            if (b) resolve(b);
-            else reject(new Error("Failed to capture photo"));
-          },
-          "image/jpeg",
-          0.9
-        );
-      });
-
-      const fileName = `photo-${Date.now()}.jpg`;
-      const file = new File([blob], fileName, {
-        type: blob.type || "image/jpeg",
-      });
-      const url = URL.createObjectURL(blob);
-
-      setPendingAttachment((prev) => {
-        if (prev?.url) {
-          try {
-            URL.revokeObjectURL(prev.url);
-          } catch {
-            // ignore
-          }
-        }
-        return {
-          type: "image",
-          url,
-          fileName,
-          file,
-        };
-      });
-
-      setIsPreviewOpen(true);
-      setIsPhotoCapture(false);
-      stopAndCleanupRecording();
-    } catch (err) {
-      // eslint-disable-next-line no-console
-      console.error("Photo capture failed:", err);
-      setRecordingError("Failed to capture photo. Please try again.");
-    }
-  }
-
-  function handleCancelPhotoCapture() {
-    setIsPhotoCapture(false);
-    stopAndCleanupRecording();
   }
 
   function getVideoDuration(url: string): Promise<number> {
@@ -622,11 +438,7 @@ export default function ChatWindow() {
       } else if (attachmentToSend && attachmentToSend.type === "video") {
         // For video: JSON + binary packing like sample.js
         const sendBinary = async () => {
-          await sendBinaryVideoOverWS(ws, attachmentToSend.file, {
-            ...basePayload,
-            trimStartSec: attachmentToSend.trimStartSec,
-            trimEndSec: attachmentToSend.trimEndSec,
-          });
+          await sendBinaryVideoOverWS(ws, attachmentToSend.file, basePayload);
           setSending(true);
         };
 
@@ -652,255 +464,26 @@ export default function ChatWindow() {
     }
   }
 
-  function toggleAttachmentMenu() {
-    setIsAttachmentMenuOpen((open) => !open);
-  }
-
-  function handleRecordVideoClick() {
-    setIsAttachmentMenuOpen(false);
-    void startVideoPreview();
-  }
-
-  function handleTakePhotoClick() {
-    setIsAttachmentMenuOpen(false);
-    const canUseCustomCamera =
+  function handleCameraClick() {
+    const canUseCustomRecorder =
       typeof window !== "undefined" &&
       typeof navigator !== "undefined" &&
-      !!navigator.mediaDevices?.getUserMedia;
+      !!navigator.mediaDevices?.getUserMedia &&
+      "MediaRecorder" in window;
 
-    if (canUseCustomCamera) {
-      void startPhotoCapture();
-      return;
+    if (canUseCustomRecorder) {
+      // eslint-disable-next-line no-alert
+      const useRecorder = window.confirm(
+        "Do you want to record a new video? (Maximum 4 seconds)\nPress Cancel to choose from your gallery instead."
+      );
+      if (useRecorder) {
+        void startCustomVideoRecording();
+        return;
+      }
     }
 
-    // Fallback: native file picker with camera
-    photoInputRef.current?.click();
-  }
-
-  function handleUploadMediaClick() {
-    setIsAttachmentMenuOpen(false);
+    // Fallback: use classic file picker (gallery / system camera)
     fileInputRef.current?.click();
-  }
-
-  function handleCancelVideoPreview() {
-    if (
-      mediaRecorderRef.current &&
-      mediaRecorderRef.current.state === "recording"
-    ) {
-      try {
-        mediaRecorderRef.current.stop();
-      } catch {
-        // ignore
-      }
-    } else {
-      stopAndCleanupRecording();
-    }
-    setIsRecording(false);
-    setIsVideoPreview(false);
-  }
-
-  function handleStopVideoRecording() {
-    if (
-      mediaRecorderRef.current &&
-      mediaRecorderRef.current.state === "recording"
-    ) {
-      try {
-        mediaRecorderRef.current.stop();
-      } catch {
-        // ignore
-      }
-    }
-  }
-
-  function handleTrimCancel() {
-    setTrimState((prev) => {
-      if (prev?.objectUrl) {
-        try {
-          URL.revokeObjectURL(prev.objectUrl);
-        } catch {
-          // ignore
-        }
-      }
-      return null;
-    });
-  }
-
-  function handleTrimConfirm() {
-    if (!trimState) return;
-    const { file, objectUrl, duration, startSec, lengthSec } = trimState;
-    const endSec = Math.min(startSec + lengthSec, duration);
-
-    setPendingAttachment((prev) => {
-      if (prev?.url && prev.url !== objectUrl) {
-        try {
-          URL.revokeObjectURL(prev.url);
-        } catch {
-          // ignore
-        }
-      }
-      return {
-        type: "video",
-        url: objectUrl,
-        fileName: file.name,
-        file,
-        trimStartSec: startSec,
-        trimEndSec: endSec,
-      };
-    });
-
-    setTrimState(null);
-    setIsPreviewOpen(true);
-  }
-
-  function handleTrimStartChange(newStart: number) {
-    setTrimState((prev) => {
-      if (!prev) return prev;
-      const maxStart = Math.max(0, prev.duration - prev.lengthSec);
-      const clampedStart = Math.min(Math.max(0, newStart), maxStart);
-      return { ...prev, startSec: clampedStart };
-    });
-  }
-
-  function handleTrimLengthChange(newLength: number) {
-    setTrimState((prev) => {
-      if (!prev) return prev;
-      const maxLength = Math.min(4, prev.duration);
-      const clampedLength = Math.min(Math.max(0.5, newLength), maxLength);
-      const maxStart = Math.max(0, prev.duration - clampedLength);
-      const clampedStart = Math.min(prev.startSec, maxStart);
-      return {
-        ...prev,
-        startSec: clampedStart,
-        lengthSec: clampedLength,
-      };
-    });
-  }
-
-  function formatTimeLabel(sec: number): string {
-    if (!Number.isFinite(sec) || sec < 0) return "0:00";
-    const total = Math.floor(sec);
-    const minutes = Math.floor(total / 60);
-    const seconds = total % 60;
-    return `${minutes}:${seconds.toString().padStart(2, "0")}`;
-  }
-
-  function handleTrimDragMove(ev: PointerEvent) {
-    setTrimState((prev) => {
-      if (!prev || !trimTrackRef.current || !trimDragKindRef.current) {
-        return prev;
-      }
-      const rect = trimTrackRef.current.getBoundingClientRect();
-      if (!rect || rect.width <= 0) return prev;
-      const ratio = (ev.clientX - rect.left) / rect.width;
-      let pos = ratio * prev.duration;
-      if (!Number.isFinite(pos)) pos = 0;
-      pos = Math.min(Math.max(0, pos), prev.duration);
-
-      const minLength = 0.5;
-      const maxLength = Math.min(4, prev.duration);
-      let start = prev.startSec;
-      let length = prev.lengthSec;
-      let end = Math.min(start + length, prev.duration);
-
-      if (trimDragKindRef.current === "start") {
-        const maxStart = end - minLength;
-        start = Math.min(Math.max(0, pos), maxStart);
-        length = Math.min(Math.max(minLength, end - start), maxLength);
-      } else if (trimDragKindRef.current === "end") {
-        const minEnd = start + minLength;
-        end = Math.min(Math.max(minEnd, pos), prev.duration);
-        length = Math.min(Math.max(minLength, end - start), maxLength);
-      }
-
-      // Scrub preview video to current handle position
-      const video = trimVideoRef.current;
-      if (video) {
-        const targetTime =
-          trimDragKindRef.current === "start"
-            ? start
-            : Math.min(start + length, prev.duration);
-        try {
-          video.currentTime = Math.min(
-            Math.max(0, targetTime),
-            prev.duration || targetTime
-          );
-        } catch {
-          // ignore seek errors
-        }
-      }
-
-      return {
-        ...prev,
-        startSec: start,
-        lengthSec: length,
-      };
-    });
-  }
-
-  function handleTrimDragEnd() {
-    trimDragKindRef.current = null;
-    window.removeEventListener("pointermove", handleTrimDragMove);
-    window.removeEventListener("pointerup", handleTrimDragEnd);
-    window.removeEventListener("pointercancel", handleTrimDragEnd);
-  }
-
-  function beginTrimDrag(
-    kind: "start" | "end",
-    ev: React.PointerEvent<HTMLButtonElement>
-  ) {
-    ev.preventDefault();
-    ev.stopPropagation();
-    trimDragKindRef.current = kind;
-    window.addEventListener("pointermove", handleTrimDragMove);
-    window.addEventListener("pointerup", handleTrimDragEnd);
-    window.addEventListener("pointercancel", handleTrimDragEnd);
-  }
-
-  function handleTrimVideoTimeUpdate() {
-    if (!trimState || !trimVideoRef.current) return;
-    const video = trimVideoRef.current;
-    setTrimCurrentTime(video.currentTime || 0);
-    const start = trimState.startSec;
-    const end = Math.min(
-      trimState.startSec + trimState.lengthSec,
-      trimState.duration
-    );
-    if (video.currentTime > end + 0.05) {
-      // Loop inside selected window
-      video.currentTime = start;
-    }
-  }
-
-  function handlePreviewVideoTimeUpdate() {
-    if (!pendingAttachment || pendingAttachment.type !== "video") return;
-    const vid = previewVideoRef.current;
-    if (!vid) return;
-    const start = pendingAttachment.trimStartSec ?? 0;
-    const end =
-      pendingAttachment.trimEndSec ??
-      (Number.isFinite(vid.duration) && vid.duration > 0
-        ? vid.duration
-        : start + 4);
-    if (vid.currentTime > end + 0.05) {
-      vid.currentTime = start;
-    }
-  }
-
-  function handleTrimPlayPause() {
-    const video = trimVideoRef.current;
-    if (!video) return;
-    if (video.paused) {
-      void video.play();
-    } else {
-      video.pause();
-    }
-  }
-
-  function handleTrimToggleMute() {
-    const video = trimVideoRef.current;
-    if (!video) return;
-    video.muted = !video.muted;
-    setTrimIsMuted(video.muted);
   }
 
   async function handleMediaSelected(e: React.ChangeEvent<HTMLInputElement>) {
@@ -917,10 +500,8 @@ export default function ChatWindow() {
     // Size limit: 10MB
     const MAX_BYTES = 10 * 1024 * 1024;
     if (file.size > MAX_BYTES) {
-      openAlert(
-        "Maximum file size is 10MB. Please select a smaller file.",
-        "File too large"
-      );
+      // eslint-disable-next-line no-alert
+      alert("Maximum file size is 10MB. Please select a smaller file.");
       e.target.value = "";
       return;
     }
@@ -941,14 +522,9 @@ export default function ChatWindow() {
       try {
         const duration = await getVideoDuration(objectUrl);
         if (duration > 4) {
-          setTrimState({
-            file,
-            objectUrl,
-            duration,
-            startSec: 0,
-            lengthSec: Math.min(4, duration),
-          });
-          // Do not keep file input value; allow selecting again later
+          // eslint-disable-next-line no-alert
+          alert("Video en fazla 4 saniye olabilir.");
+          URL.revokeObjectURL(objectUrl);
           e.target.value = "";
           return;
         }
@@ -967,9 +543,6 @@ export default function ChatWindow() {
       fileName: file.name,
       file,
     });
-
-    // Open preview modal immediately for both photo and video
-    setIsPreviewOpen(true);
 
     // File is only kept in pending state; it is sent to backend during send.
     e.target.value = "";
@@ -1011,28 +584,6 @@ export default function ChatWindow() {
       vv.removeEventListener("resize", onResize);
     };
   }, []);
-
-  useEffect(() => {
-    if (!isAttachmentMenuOpen) return;
-    function handleClickOutside(event: MouseEvent) {
-      const menuEl = attachmentMenuRef.current;
-      const buttonEl = attachmentButtonRef.current;
-      const target = event.target as Node | null;
-      if (!target || !menuEl || !buttonEl) return;
-      if (menuEl.contains(target) || buttonEl.contains(target)) return;
-      setIsAttachmentMenuOpen(false);
-    }
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => {
-      document.removeEventListener("mousedown", handleClickOutside);
-    };
-  }, [isAttachmentMenuOpen]);
-
-  useEffect(() => {
-    if (!pendingAttachment && isPreviewOpen) {
-      setIsPreviewOpen(false);
-    }
-  }, [pendingAttachment, isPreviewOpen]);
 
   function handleFocus() {
     keyboardOpen.current = true;
@@ -1219,79 +770,24 @@ export default function ChatWindow() {
         onSubmit={handleSend}
         className="px-4 md:px-6 py-3 sm:py-4 border-t border-white/10 bg-[#121213] space-y-2"
       >
-        <div
-          className={`space-y-2 ${
-            isVideoPreview || isPhotoCapture ? "block" : "hidden"
-          }`}
-        >
-          <div className="flex items-center gap-2 text-xs text-red-400">
-            <span className="h-2 w-2 rounded-full bg-red-500 animate-pulse" />
-            <span>
-              {isPhotoCapture
-                ? "Camera is active – tap Take photo to capture."
-                : isRecording
-                ? "Recording video… (maximum 4 seconds)"
-                : "Camera is active – tap Record video to start."}
-            </span>
+        {isRecording && (
+          <div className="space-y-2">
+            <div className="flex items-center gap-2 text-xs text-red-400">
+              <span className="h-2 w-2 rounded-full bg-red-500 animate-pulse" />
+              <span>Video kaydediliyor… (maksimum 4 saniye)</span>
+            </div>
+            <div className="w-full rounded-xl overflow-hidden border border-red-500/40 bg-black/60">
+              <video
+                ref={recordingVideoRef}
+                className="w-full h-40 object-contain"
+                muted
+                autoPlay
+                playsInline
+              />
+            </div>
           </div>
-          <div className="w-full rounded-xl overflow-hidden border border-red-500/40 bg-black/60">
-            <video
-              ref={recordingVideoRef}
-              className="w-full h-40 object-contain"
-              muted
-              autoPlay
-              playsInline
-            />
-          </div>
-          <div className="flex justify-end gap-2">
-            {isPhotoCapture ? (
-              <>
-                <button
-                  type="button"
-                  onClick={handleCancelPhotoCapture}
-                  className="px-3 py-1.5 rounded-full border border-white/20 text-[11px] text-white/70 hover:text-white hover:bg-white/5"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={handleCapturePhoto}
-                  className="px-3 py-1.5 rounded-full bg-primary text-[11px] text-white hover:bg-primary/90"
-                >
-                  Take photo
-                </button>
-              </>
-            ) : (
-              <>
-                <button
-                  type="button"
-                  onClick={handleCancelVideoPreview}
-                  className="px-3 py-1.5 rounded-full border border-white/20 text-[11px] text-white/70 hover:text-white hover:bg-white/5"
-                >
-                  Cancel
-                </button>
-                {isRecording ? (
-                  <button
-                    type="button"
-                    onClick={handleStopVideoRecording}
-                    className="px-3 py-1.5 rounded-full bg-primary text-[11px] text-white hover:bg-primary/90"
-                  >
-                    Stop recording
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => void startCustomVideoRecording()}
-                    className="px-3 py-1.5 rounded-full bg-primary text-[11px] text-white hover:bg-primary/90"
-                  >
-                    Record video
-                  </button>
-                )}
-              </>
-            )}
-          </div>
-        </div>
-        {recordingError && !isRecording && !isPhotoCapture && (
+        )}
+        {recordingError && !isRecording && (
           <p className="text-xs text-red-400">{recordingError}</p>
         )}
         {pendingAttachment && (
@@ -1309,7 +805,6 @@ export default function ChatWindow() {
                   src={pendingAttachment.url}
                   className="max-h-full max-w-full object-cover"
                   muted
-                  playsInline
                 />
               )}
             </div>
@@ -1317,96 +812,67 @@ export default function ChatWindow() {
               <p className="text-xs text-white/70 truncate">
                 {pendingAttachment.fileName}
               </p>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setIsPreviewOpen(true)}
-                  className="text-[11px] text-white/70 hover:text-white px-2 py-1 rounded-full border border-white/25"
-                >
-                  Preview
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (pendingAttachment?.url) {
-                      try {
-                        URL.revokeObjectURL(pendingAttachment.url);
-                      } catch {
-                        // ignore
-                      }
+              <button
+                type="button"
+                onClick={() => {
+                  if (pendingAttachment?.url) {
+                    try {
+                      URL.revokeObjectURL(pendingAttachment.url);
+                    } catch {
+                      // ignore
                     }
-                    setPendingAttachment(null);
-                  }}
-                  className="text-[11px] text-white/60 hover:text-white/90 px-2 py-1 rounded-full border border-white/20"
-                >
-                  Remove
-                </button>
-              </div>
+                  }
+                  setPendingAttachment(null);
+                }}
+                className="text-[11px] text-white/60 hover:text-white/90 px-2 py-1 rounded-full border border-white/20"
+              >
+                Remove
+              </button>
             </div>
           </div>
         )}
         <div className="flex items-center gap-2 sm:gap-3">
-          <div className="relative">
-            <button
-              type="button"
-              ref={attachmentButtonRef}
-              onClick={toggleAttachmentMenu}
-              className="h-10 w-10 md:h-11 md:w-11 flex items-center justify-center rounded-full bg-[#141415] border border-white/15 text-white/80 hover:bg-white/5 transition-colors flex-shrink-0 touch-manipulation"
-              aria-label="Open attachment menu"
+          <button
+            type="button"
+            onClick={handleCameraClick}
+            className="h-10 w-10 md:h-11 md:w-11 flex items-center justify-center rounded-full bg-[#141415] border border-white/15 text-white/80 hover:bg-white/5 transition-colors flex-shrink-0 touch-manipulation"
+            aria-label="Open camera"
+          >
+            <svg
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              aria-hidden
             >
-              <svg
-                width="20"
-                height="20"
-                viewBox="0 0 24 24"
-                fill="none"
-                aria-hidden
-              >
-                <circle cx="5" cy="12" r="1.7" fill="currentColor" />
-                <circle cx="12" cy="12" r="1.7" fill="currentColor" />
-                <circle cx="19" cy="12" r="1.7" fill="currentColor" />
-              </svg>
-            </button>
-            {isAttachmentMenuOpen && (
-              <div
-                ref={attachmentMenuRef}
-                className="absolute bottom-full mb-2 left-0 w-48 rounded-xl bg-[#18181a] border border-white/15 shadow-xl z-20 py-1"
-              >
-                <button
-                  type="button"
-                  onClick={handleRecordVideoClick}
-                  className="w-full px-3 py-2 text-left text-xs text-white/80 hover:bg-white/5"
-                >
-                  Record video
-                </button>
-                <button
-                  type="button"
-                  onClick={handleTakePhotoClick}
-                  className="w-full px-3 py-2 text-left text-xs text-white/80 hover:bg-white/5"
-                >
-                  Take photo
-                </button>
-                <button
-                  type="button"
-                  onClick={handleUploadMediaClick}
-                  className="w-full px-3 py-2 text-left text-xs text-white/80 hover:bg-white/5"
-                >
-                  Upload media
-                </button>
-              </div>
-            )}
-          </div>
+              <rect
+                x="3.5"
+                y="6.5"
+                width="17"
+                height="13"
+                rx="2"
+                stroke="currentColor"
+                strokeWidth="1.5"
+              />
+              <path
+                d="M9 6.5L10.2 4.8C10.6 4.2 11.3 3.8 12 3.8C12.7 3.8 13.4 4.2 13.8 4.8L15 6.5"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+              />
+              <circle
+                cx="12"
+                cy="13"
+                r="3"
+                stroke="currentColor"
+                strokeWidth="1.5"
+              />
+            </svg>
+          </button>
           <input
             ref={fileInputRef}
             type="file"
             accept="image/*,video/*"
-            className="hidden"
-            onChange={handleMediaSelected}
-          />
-          <input
-            ref={photoInputRef}
-            type="file"
-            accept="image/*"
-            capture="environment"
             className="hidden"
             onChange={handleMediaSelected}
           />
@@ -1431,215 +897,6 @@ export default function ChatWindow() {
           </button>
         </div>
       </form>
-
-      {isPreviewOpen && pendingAttachment && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/70 px-4">
-          <div className="w-full max-w-md sm:max-w-lg md:max-w-2xl rounded-2xl bg-[#111112] border border-white/15 shadow-2xl p-4 sm:p-6 space-y-4 relative">
-            <button
-              type="button"
-              onClick={() => setIsPreviewOpen(false)}
-              className="absolute right-3 top-3 text-white/70 hover:text-white text-sm"
-              aria-label="Close preview"
-            >
-              ✕
-            </button>
-            <div className="space-y-1 pr-6">
-              <p className="text-xs font-semibold text-white/70 uppercase tracking-wide">
-                {pendingAttachment.type === "video" ? "Video preview" : "Photo preview"}
-              </p>
-              <p className="text-xs text-white/60 truncate">
-                {pendingAttachment.fileName}
-              </p>
-              {pendingAttachment.type === "video" && (
-                <p className="text-[11px] text-white/50">
-                  {formatTimeLabel(
-                    previewVideoRef.current?.currentTime ??
-                      pendingAttachment.trimStartSec ??
-                      0
-                  )}
-                  {" / "}
-                  {formatTimeLabel(
-                    (pendingAttachment.trimEndSec ?? 0) -
-                      (pendingAttachment.trimStartSec ?? 0) || 0
-                  )}
-                </p>
-              )}
-            </div>
-            <div className="rounded-xl overflow-hidden border border-white/15 bg-black/70 max-h-[70vh] flex items-center justify-center">
-              {pendingAttachment.type === "video" ? (
-                <video
-                  ref={previewVideoRef}
-                  src={pendingAttachment.url}
-                  autoPlay
-                  playsInline
-                  muted={false}
-                  onTimeUpdate={handlePreviewVideoTimeUpdate}
-                  onLoadedMetadata={(ev) => {
-                    const vid = ev.currentTarget;
-                    const start = pendingAttachment.trimStartSec ?? 0;
-                    try {
-                      vid.currentTime = start;
-                    } catch {
-                      // ignore
-                    }
-                  }}
-                  className="w-full h-full max-h-[70vh] object-contain"
-                />
-              ) : (
-                <img
-                  src={pendingAttachment.url}
-                  alt={pendingAttachment.fileName || "Captured photo"}
-                  className="w-full h-full max-h-[70vh] object-contain"
-                />
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {trimState && (
-        <div className="fixed inset-0 z-45 flex items-center justify-center bg-black/70 px-4">
-          <div className="w-full max-w-md sm:max-w-lg rounded-2xl bg-[#111112] border border-white/15 shadow-2xl p-4 sm:p-6 space-y-4 relative">
-            <button
-              type="button"
-              onClick={handleTrimCancel}
-              className="absolute right-3 top-3 text-white/70 hover:text-white text-sm"
-              aria-label="Close trim"
-            >
-              ✕
-            </button>
-            <div className="space-y-1 pr-6">
-              <p className="text-xs font-semibold text-white/70 uppercase tracking-wide">
-                Trim video
-              </p>
-              <p className="text-xs text-white/60">
-                Choose up to 4 seconds to send (total duration{" "}
-                {trimState.duration.toFixed(1)}s).
-              </p>
-            </div>
-            <div className="rounded-xl overflow-hidden border border-white/15 bg-black/70">
-              <video
-                ref={trimVideoRef}
-                src={trimState.objectUrl}
-                controls
-                onTimeUpdate={handleTrimVideoTimeUpdate}
-                className="w-full max-h-[40vh] object-contain"
-              />
-            </div>
-            <div className="space-y-3">
-              <div className="space-y-2">
-                <div className="flex justify-between text-[11px] text-white/60">
-                  <span>
-                    Start: {trimState.startSec.toFixed(1)}s
-                  </span>
-                  <span>
-                    End:{" "}
-                    {Math.min(
-                      trimState.startSec + trimState.lengthSec,
-                      trimState.duration
-                    ).toFixed(1)}
-                    s
-                  </span>
-                </div>
-                <div
-                  ref={trimTrackRef}
-                  className="relative h-10 rounded-full bg-white/8 overflow-hidden touch-none select-none"
-                >
-                  <div className="absolute inset-y-3 left-2 right-2 rounded-full bg-white/10" />
-                  {trimState.duration > 0 && (
-                    <>
-                      {(() => {
-                        const total = trimState.duration || 1;
-                        const endSec = Math.min(
-                          trimState.startSec + trimState.lengthSec,
-                          trimState.duration
-                        );
-                        const startPct =
-                          (trimState.startSec / total) * 100;
-                        const endPct = (endSec / total) * 100;
-                        const widthPct = Math.max(endPct - startPct, 2);
-                        return (
-                          <>
-                            <div
-                              className="absolute inset-y-2 rounded-full bg-primary/40 border border-primary/70"
-                              style={{
-                                left: `${startPct}%`,
-                                width: `${widthPct}%`,
-                              }}
-                            />
-                            <button
-                              type="button"
-                              onPointerDown={(ev) =>
-                                beginTrimDrag("start", ev)
-                              }
-                              className="absolute inset-y-1 -translate-x-1/2 flex items-center justify-center w-5"
-                              style={{ left: `${startPct}%` }}
-                            >
-                              <div className="h-6 w-1.5 rounded-full bg-white shadow-[0_0_6px_rgba(0,0,0,0.6)]" />
-                            </button>
-                            <button
-                              type="button"
-                              onPointerDown={(ev) =>
-                                beginTrimDrag("end", ev)
-                              }
-                              className="absolute inset-y-1 -translate-x-1/2 flex items-center justify-center w-5"
-                              style={{ left: `${endPct}%` }}
-                            >
-                              <div className="h-6 w-1.5 rounded-full bg-white shadow-[0_0_6px_rgba(0,0,0,0.6)]" />
-                            </button>
-                          </>
-                        );
-                      })()}
-                    </>
-                  )}
-                </div>
-                <p className="text-[11px] text-white/50">
-                  Drag the white handles to choose the part you want to send
-                  (max 4 seconds).
-                </p>
-              </div>
-            </div>
-            <div className="flex justify-end gap-2 pt-1">
-              <button
-                type="button"
-                onClick={handleTrimCancel}
-                className="px-3 py-1.5 rounded-full border border-white/20 text-xs text-white/70 hover:text-white hover:bg-white/5"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleTrimConfirm}
-                className="px-4 py-1.5 rounded-full bg-primary text-xs text-white hover:bg-primary/90"
-              >
-                Use this clip
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {alertState && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
-          <div className="w-full max-w-sm rounded-2xl bg-[#111112] border border-white/15 shadow-2xl p-5 space-y-4">
-            {alertState.title && (
-              <h3 className="text-sm font-semibold text-white">
-                {alertState.title}
-              </h3>
-            )}
-            <p className="text-sm text-white/80">{alertState.message}</p>
-            <div className="flex justify-end">
-              <button
-                type="button"
-                onClick={() => setAlertState(null)}
-                className="px-4 py-1.5 rounded-full bg-primary text-sm text-white hover:bg-primary/90"
-              >
-                OK
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
