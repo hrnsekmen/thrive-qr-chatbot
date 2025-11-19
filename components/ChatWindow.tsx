@@ -150,7 +150,13 @@ export default function ChatWindow() {
 
   useEffect(() => {
     if (!session) {
-      router.replace("/");
+      // Kullanıcı doğrudan /chat?activity=... ile geldiyse,
+      // activity parametresini koruyarak form sayfasına geri yönlendir.
+      const activityId = getActivityIdFromUrl();
+      const target = activityId
+        ? `/?activity=${encodeURIComponent(activityId)}`
+        : "/";
+      router.replace(target);
       return;
     }
     const firstName = session.name.split(" ")[0] || session.name;
