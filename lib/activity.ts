@@ -1,3 +1,5 @@
+import { AGENT_HOST } from "./ws";
+
 export type ActivityStatus = "active" | "not_active" | "invalid";
 
 export async function checkActivityValidity(
@@ -8,7 +10,11 @@ export async function checkActivityValidity(
     return "invalid";
   }
 
-  const url = `/api/check-activity-validity?activity=${encodeURIComponent(
+  if (typeof fetch === "undefined") {
+    return "invalid";
+  }
+
+  const url = `https://${AGENT_HOST}/v1/check_activity_validity?activity=${encodeURIComponent(
     trimmed
   )}`;
 

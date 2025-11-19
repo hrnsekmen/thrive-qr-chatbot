@@ -5,21 +5,15 @@ import { loadSession, UserSession } from "@/lib/session";
 import { useRouter } from "next/navigation";
 import { getWS, getActivityIdFromUrl, isWSOpen, subscribeWS } from "@/lib/ws";
 
-type MessageAttachment = {
-  type: "image" | "video";
-  url: string;
-  fileName: string;
-};
-
 type Message = {
   id: string;
   role: "assistant" | "user";
   content: string;
-  attachment?: MessageAttachment;
-};
-
-type PendingAttachment = MessageAttachment & {
-  file: File;
+  attachment?: {
+    type: "image" | "video";
+    url: string;
+    fileName: string;
+  };
 };
 
 type MessageBubbleProps = {
@@ -92,16 +86,10 @@ export default function ChatWindow() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
-  const [pendingAttachment, setPendingAttachment] =
-    useState<PendingAttachment | null>(null);
+  const [pendingAttachment, setPendingAttachment] = useState<
+    Message["attachment"] | null
+  >(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const [isRecording, setIsRecording] = useState(false);
-  const [recordingError, setRecordingError] = useState<string | null>(null);
-  const recordingVideoRef = useRef<HTMLVideoElement | null>(null);
-  const mediaStreamRef = useRef<MediaStream | null>(null);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const recordingChunksRef = useRef<Blob[]>([]);
-  const recordingTimeoutRef = useRef<number | null>(null);
   const streamMsgIdRef = useRef<string | null>(null);
   const tokenQueueRef = useRef<string[]>([]);
   const flushTimerRef = useRef<number | null>(null);
@@ -155,212 +143,12 @@ export default function ChatWindow() {
     });
   }, [messages]);
 
-  // JSON + binary paketlemek için yardımcılar
-  async function fileToBase64(file: File): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => {
-        const result = reader.result;
-        if (typeof result !== "string") {
-          reject(new Error("Unexpected FileReader result"));
-          return;
-        }
-        const commaIndex = result.indexOf(",");
-        if (commaIndex >= 0) {
-          resolve(result.substring(commaIndex + 1));
-        } else {
-          resolve(result);
-        }
-      };
-      reader.onerror = () =>
-        reject(reader.error || new Error("FileReader error"));
-      reader.readAsDataURL(file);
-    });
-  }
-
-  async function sendBinaryVideoOverWS(
-    ws: WebSocket,
-    file: File,
-    metadata: {
-      message: string;
-      activity_id: string;
-      session_id: string | null;
-      time: string;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      user_meta?: any;
-    }
-  ) {
-    const jsonString = JSON.stringify(metadata);
-    const jsonBytes = new TextEncoder().encode(jsonString);
-    const videoBytes = await file.arrayBuffer();
-
-    const totalLength = 4 + jsonBytes.length + videoBytes.byteLength;
-    const buffer = new ArrayBuffer(totalLength);
-    const view = new DataView(buffer);
-
-    // İlk 4 byte: JSON'un uzunluğu (Big Endian)
-    view.setUint32(0, jsonBytes.length, false);
-
-    const byteView = new Uint8Array(buffer);
-    byteView.set(jsonBytes, 4);
-    byteView.set(new Uint8Array(videoBytes), 4 + jsonBytes.length);
-
-    ws.send(buffer);
-  }
-
-  function stopAndCleanupRecording() {
-    if (recordingTimeoutRef.current !== null) {
-      window.clearTimeout(recordingTimeoutRef.current);
-      recordingTimeoutRef.current = null;
-    }
-    if (mediaStreamRef.current) {
-      mediaStreamRef.current.getTracks().forEach((t) => t.stop());
-      mediaStreamRef.current = null;
-    }
-    const videoEl = recordingVideoRef.current;
-    if (videoEl) {
-      videoEl.srcObject = null;
-    }
-  }
-
-  async function startCustomVideoRecording() {
-    setRecordingError(null);
-    if (
-      typeof navigator === "undefined" ||
-      !navigator.mediaDevices ||
-      !navigator.mediaDevices.getUserMedia
-    ) {
-      setRecordingError("Camera access is not supported on this device.");
-      return;
-    }
-
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: "environment" } },
-        audio: true,
-      });
-      mediaStreamRef.current = stream;
-
-      const videoEl = recordingVideoRef.current;
-      if (videoEl) {
-        videoEl.srcObject = stream;
-        try {
-          await videoEl.play();
-        } catch {
-          // ignore
-        }
-      }
-
-      const recorder = new MediaRecorder(stream);
-      mediaRecorderRef.current = recorder;
-      recordingChunksRef.current = [];
-
-      recorder.ondataavailable = (event: BlobEvent) => {
-        if (event.data && event.data.size > 0) {
-          recordingChunksRef.current.push(event.data);
-        }
-      };
-
-      recorder.onstop = () => {
-        const chunks = recordingChunksRef.current;
-        recordingChunksRef.current = [];
-        stopAndCleanupRecording();
-
-        if (chunks.length === 0) {
-          setIsRecording(false);
-          return;
-        }
-
-        const blob = new Blob(chunks, { type: "video/webm" });
-        const MAX_BYTES = 10 * 1024 * 1024;
-        if (blob.size > MAX_BYTES) {
-          // eslint-disable-next-line no-alert
-          alert(
-            "Recorded video exceeds the 10MB limit. Please record a shorter or lower-resolution video."
-          );
-          setIsRecording(false);
-          return;
-        }
-
-        const fileName = `recorded-${Date.now()}.webm`;
-        const file = new File([blob], fileName, {
-          type: blob.type || "video/webm",
-        });
-        const url = URL.createObjectURL(blob);
-
-        setPendingAttachment((prev) => {
-          if (prev?.url) {
-            try {
-              URL.revokeObjectURL(prev.url);
-            } catch {
-              // ignore
-            }
-          }
-          return {
-            type: "video",
-            url,
-            fileName,
-            file,
-          };
-        });
-        setIsRecording(false);
-      };
-
-      recorder.start();
-      setIsRecording(true);
-
-      if (recordingTimeoutRef.current !== null) {
-        window.clearTimeout(recordingTimeoutRef.current);
-      }
-      recordingTimeoutRef.current = window.setTimeout(() => {
-        if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
-          try {
-            mediaRecorderRef.current.stop();
-          } catch {
-            // ignore
-          }
-        }
-      }, 4000);
-    } catch (err) {
-      // eslint-disable-next-line no-console
-      console.error("Camera access failed:", err);
-      stopAndCleanupRecording();
-      setIsRecording(false);
-      setRecordingError("Could not access the camera. Please check permissions.");
-    }
-  }
-
-  function getVideoDuration(url: string): Promise<number> {
-    return new Promise((resolve, reject) => {
-      const video = document.createElement("video");
-      video.preload = "metadata";
-
-      const cleanup = () => {
-        video.removeAttribute("src");
-        video.load();
-      };
-
-      video.onloadedmetadata = () => {
-        const duration = video.duration;
-        cleanup();
-        resolve(duration);
-      };
-
-      video.onerror = () => {
-        cleanup();
-        reject(new Error("Failed to load video metadata"));
-      };
-
-      video.src = url;
-    });
-  }
-
   async function handleSend(e: React.FormEvent) {
     e.preventDefault();
     const text = input.trim();
     if (!text && !pendingAttachment) return;
     if (!isWSOpen()) {
-      // prevent sending while disconnected
+      // bağlantı yokken gönderimi engelle
       return;
     }
 
@@ -369,15 +157,6 @@ export default function ChatWindow() {
     if (attachmentToSend) {
       setPendingAttachment(null);
     }
-
-    const attachmentForMessage: MessageAttachment | undefined =
-      attachmentToSend
-        ? {
-            type: attachmentToSend.type,
-            url: attachmentToSend.url,
-            fileName: attachmentToSend.fileName,
-          }
-        : undefined;
 
     const userMsg: Message = {
       id: crypto.randomUUID(),
@@ -389,13 +168,13 @@ export default function ChatWindow() {
             ? "Photo"
             : "Video"
           : ""),
-      attachment: attachmentForMessage,
+      attachment: attachmentToSend ?? undefined,
     };
     setMessages((m) => [...m, userMsg]);
 
     const ws = getWS();
 
-    const basePayload = {
+    const payload = {
       activity_id: getActivityIdFromUrl(),
       session_id: null,
       message: text,
@@ -403,90 +182,30 @@ export default function ChatWindow() {
       user_meta: userMeta,
     };
     // eslint-disable-next-line no-console
-    console.log("WS send base payload:", basePayload, {
-      hasAttachment: !!attachmentToSend,
-      readyState: ws.readyState,
-    });
+    console.log("WS send payload:", payload, "readyState:", ws.readyState);
 
-    const sendJsonPayload = (payload: unknown) => {
-      const json = JSON.stringify(payload);
+    // Şu an için görseller sadece UI tarafında demo olarak gösteriliyor.
+    // Metin yoksa backend'e herhangi bir mesaj göndermiyoruz.
+    if (text) {
       if (ws.readyState === WebSocket.OPEN) {
-        ws.send(json);
+        ws.send(JSON.stringify(payload));
         setSending(true);
       } else {
         ws.onopen = () => {
           // eslint-disable-next-line no-console
-          console.log("WS onopen -> sending JSON payload now");
-          ws.send(json);
+          console.log("WS onopen -> sending payload now");
+          ws.send(JSON.stringify(payload));
           setSending(true);
         };
       }
-    };
-
-    try {
-      if (attachmentToSend && attachmentToSend.type === "image") {
-        // For images: send base64 inside JSON
-        const base64 = await fileToBase64(attachmentToSend.file);
-        const payload = {
-          ...basePayload,
-          media: {
-            type: "image",
-            content: base64,
-          },
-        };
-        sendJsonPayload(payload);
-      } else if (attachmentToSend && attachmentToSend.type === "video") {
-        // For video: JSON + binary packing like sample.js
-        const sendBinary = async () => {
-          await sendBinaryVideoOverWS(ws, attachmentToSend.file, basePayload);
-          setSending(true);
-        };
-
-        if (ws.readyState === WebSocket.OPEN) {
-          await sendBinary();
-        } else {
-          ws.onopen = () => {
-            // eslint-disable-next-line no-console
-            console.log("WS onopen -> sending binary video payload now");
-            sendBinary().catch((err) => {
-              // eslint-disable-next-line no-console
-              console.error("Failed to send binary video:", err);
-            });
-          };
-        }
-      } else if (text) {
-        // Sadece metin
-        sendJsonPayload(basePayload);
-      }
-    } catch (err) {
-      // eslint-disable-next-line no-console
-      console.error("Failed to send message:", err);
     }
   }
 
   function handleCameraClick() {
-    const canUseCustomRecorder =
-      typeof window !== "undefined" &&
-      typeof navigator !== "undefined" &&
-      !!navigator.mediaDevices?.getUserMedia &&
-      "MediaRecorder" in window;
-
-    if (canUseCustomRecorder) {
-      // eslint-disable-next-line no-alert
-      const useRecorder = window.confirm(
-        "Do you want to record a new video? (Maximum 4 seconds)\nPress Cancel to choose from your gallery instead."
-      );
-      if (useRecorder) {
-        void startCustomVideoRecording();
-        return;
-      }
-    }
-
-    // Fallback: use classic file picker (gallery / system camera)
     fileInputRef.current?.click();
   }
 
-  async function handleMediaSelected(e: React.ChangeEvent<HTMLInputElement>) {
+  function handleMediaSelected(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -497,16 +216,7 @@ export default function ChatWindow() {
       return;
     }
 
-    // Size limit: 10MB
-    const MAX_BYTES = 10 * 1024 * 1024;
-    if (file.size > MAX_BYTES) {
-      // eslint-disable-next-line no-alert
-      alert("Maximum file size is 10MB. Please select a smaller file.");
-      e.target.value = "";
-      return;
-    }
-
-    // Release previous preview URL if there was one
+    // Önceki pending görsel varsa onun URL'sini serbest bırak
     if (pendingAttachment?.url) {
       try {
         URL.revokeObjectURL(pendingAttachment.url);
@@ -518,33 +228,13 @@ export default function ChatWindow() {
     const objectUrl = URL.createObjectURL(file);
     const mediaType = isImage ? "image" : "video";
 
-    if (mediaType === "video") {
-      try {
-        const duration = await getVideoDuration(objectUrl);
-        if (duration > 4) {
-          // eslint-disable-next-line no-alert
-          alert("Video en fazla 4 saniye olabilir.");
-          URL.revokeObjectURL(objectUrl);
-          e.target.value = "";
-          return;
-        }
-      } catch {
-        // eslint-disable-next-line no-console
-        console.error("Video duration could not be read. Selected video was rejected.");
-        URL.revokeObjectURL(objectUrl);
-        e.target.value = "";
-        return;
-      }
-    }
-
     setPendingAttachment({
       type: mediaType,
       url: objectUrl,
       fileName: file.name,
-      file,
     });
 
-    // File is only kept in pending state; it is sent to backend during send.
+    // Dosya sadece pending state'te tutuluyor, şu an için backend'e gönderim yok.
     e.target.value = "";
   }
 
@@ -689,29 +379,6 @@ export default function ChatWindow() {
     };
     flushTimerRef.current = window.setTimeout(tick, 10);
   }
-
-  useEffect(() => {
-    return () => {
-      if (recordingTimeoutRef.current !== null) {
-        window.clearTimeout(recordingTimeoutRef.current);
-        recordingTimeoutRef.current = null;
-      }
-      if (
-        mediaRecorderRef.current &&
-        mediaRecorderRef.current.state === "recording"
-      ) {
-        try {
-          mediaRecorderRef.current.stop();
-        } catch {
-          // ignore
-        }
-      }
-      if (mediaStreamRef.current) {
-        mediaStreamRef.current.getTracks().forEach((t) => t.stop());
-        mediaStreamRef.current = null;
-      }
-    };
-  }, []);
   return (
     <div className="relative flex flex-col h-full pb-safe">
       {/* Ambient background effects */}
@@ -770,26 +437,6 @@ export default function ChatWindow() {
         onSubmit={handleSend}
         className="px-4 md:px-6 py-3 sm:py-4 border-t border-white/10 bg-[#121213] space-y-2"
       >
-        {isRecording && (
-          <div className="space-y-2">
-            <div className="flex items-center gap-2 text-xs text-red-400">
-              <span className="h-2 w-2 rounded-full bg-red-500 animate-pulse" />
-              <span>Video kaydediliyor… (maksimum 4 saniye)</span>
-            </div>
-            <div className="w-full rounded-xl overflow-hidden border border-red-500/40 bg-black/60">
-              <video
-                ref={recordingVideoRef}
-                className="w-full h-40 object-contain"
-                muted
-                autoPlay
-                playsInline
-              />
-            </div>
-          </div>
-        )}
-        {recordingError && !isRecording && (
-          <p className="text-xs text-red-400">{recordingError}</p>
-        )}
         {pendingAttachment && (
           <div className="flex items-center gap-3">
             <div className="w-16 h-16 rounded-xl overflow-hidden border border-white/15 bg-black/40 flex items-center justify-center">
@@ -873,6 +520,7 @@ export default function ChatWindow() {
             ref={fileInputRef}
             type="file"
             accept="image/*,video/*"
+            capture="environment"
             className="hidden"
             onChange={handleMediaSelected}
           />
