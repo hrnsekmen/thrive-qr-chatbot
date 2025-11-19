@@ -12,6 +12,10 @@ const subscribers = new Set<Subscriber>();
 // Base domain for the agent/WS server and HTTP APIs, configurable via env.
 // In development this will default to "agent.thrivelogic.ai".
 // In production you can set NEXT_PUBLIC_AGENT_HOST to "varca.thrivelogic.ai".
+
+
+
+
 export const AGENT_HOST =
   (typeof process !== "undefined" &&
     (process as any).env?.NEXT_PUBLIC_AGENT_HOST) ||
