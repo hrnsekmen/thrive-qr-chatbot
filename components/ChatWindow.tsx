@@ -126,10 +126,16 @@ export default function ChatWindow() {
   const attachmentButtonRef = useRef<HTMLButtonElement | null>(null);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
   const [trimState, setTrimState] = useState<TrimState | null>(null);
+  const [trimCurrentTime, setTrimCurrentTime] = useState(0);
+  const [trimIsMuted, setTrimIsMuted] = useState(false);
   const [alertState, setAlertState] = useState<{
     title?: string;
     message: string;
   } | null>(null);
+  const trimTrackRef = useRef<HTMLDivElement | null>(null);
+  const trimDragKindRef = useRef<"start" | "end" | null>(null);
+  const trimVideoRef = useRef<HTMLVideoElement | null>(null);
+  const previewVideoRef = useRef<HTMLVideoElement | null>(null);
   const locationText = useMemo(() => {
     if (!session?.location) return null;
     if (
@@ -770,6 +776,133 @@ export default function ChatWindow() {
     });
   }
 
+  function formatTimeLabel(sec: number): string {
+    if (!Number.isFinite(sec) || sec < 0) return "0:00";
+    const total = Math.floor(sec);
+    const minutes = Math.floor(total / 60);
+    const seconds = total % 60;
+    return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+  }
+
+  function handleTrimDragMove(ev: PointerEvent) {
+    setTrimState((prev) => {
+      if (!prev || !trimTrackRef.current || !trimDragKindRef.current) {
+        return prev;
+      }
+      const rect = trimTrackRef.current.getBoundingClientRect();
+      if (!rect || rect.width <= 0) return prev;
+      const ratio = (ev.clientX - rect.left) / rect.width;
+      let pos = ratio * prev.duration;
+      if (!Number.isFinite(pos)) pos = 0;
+      pos = Math.min(Math.max(0, pos), prev.duration);
+
+      const minLength = 0.5;
+      const maxLength = Math.min(4, prev.duration);
+      let start = prev.startSec;
+      let length = prev.lengthSec;
+      let end = Math.min(start + length, prev.duration);
+
+      if (trimDragKindRef.current === "start") {
+        const maxStart = end - minLength;
+        start = Math.min(Math.max(0, pos), maxStart);
+        length = Math.min(Math.max(minLength, end - start), maxLength);
+      } else if (trimDragKindRef.current === "end") {
+        const minEnd = start + minLength;
+        end = Math.min(Math.max(minEnd, pos), prev.duration);
+        length = Math.min(Math.max(minLength, end - start), maxLength);
+      }
+
+      // Scrub preview video to current handle position
+      const video = trimVideoRef.current;
+      if (video) {
+        const targetTime =
+          trimDragKindRef.current === "start"
+            ? start
+            : Math.min(start + length, prev.duration);
+        try {
+          video.currentTime = Math.min(
+            Math.max(0, targetTime),
+            prev.duration || targetTime
+          );
+        } catch {
+          // ignore seek errors
+        }
+      }
+
+      return {
+        ...prev,
+        startSec: start,
+        lengthSec: length,
+      };
+    });
+  }
+
+  function handleTrimDragEnd() {
+    trimDragKindRef.current = null;
+    window.removeEventListener("pointermove", handleTrimDragMove);
+    window.removeEventListener("pointerup", handleTrimDragEnd);
+    window.removeEventListener("pointercancel", handleTrimDragEnd);
+  }
+
+  function beginTrimDrag(
+    kind: "start" | "end",
+    ev: React.PointerEvent<HTMLButtonElement>
+  ) {
+    ev.preventDefault();
+    ev.stopPropagation();
+    trimDragKindRef.current = kind;
+    window.addEventListener("pointermove", handleTrimDragMove);
+    window.addEventListener("pointerup", handleTrimDragEnd);
+    window.addEventListener("pointercancel", handleTrimDragEnd);
+  }
+
+  function handleTrimVideoTimeUpdate() {
+    if (!trimState || !trimVideoRef.current) return;
+    const video = trimVideoRef.current;
+    setTrimCurrentTime(video.currentTime || 0);
+    const start = trimState.startSec;
+    const end = Math.min(
+      trimState.startSec + trimState.lengthSec,
+      trimState.duration
+    );
+    if (video.currentTime > end + 0.05) {
+      // Loop inside selected window
+      video.currentTime = start;
+    }
+  }
+
+  function handlePreviewVideoTimeUpdate() {
+    if (!pendingAttachment || pendingAttachment.type !== "video") return;
+    const vid = previewVideoRef.current;
+    if (!vid) return;
+    const start = pendingAttachment.trimStartSec ?? 0;
+    const end =
+      pendingAttachment.trimEndSec ??
+      (Number.isFinite(vid.duration) && vid.duration > 0
+        ? vid.duration
+        : start + 4);
+    if (vid.currentTime > end + 0.05) {
+      vid.currentTime = start;
+    }
+  }
+
+  function handleTrimPlayPause() {
+    const video = trimVideoRef.current;
+    if (!video) return;
+    if (video.paused) {
+      void video.play();
+    } else {
+      video.pause();
+    }
+  }
+
+  function handleTrimToggleMute() {
+    const video = trimVideoRef.current;
+    if (!video) return;
+    video.muted = !video.muted;
+    setTrimIsMuted(video.muted);
+  }
+
   async function handleMediaSelected(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -1317,13 +1450,39 @@ export default function ChatWindow() {
               <p className="text-xs text-white/60 truncate">
                 {pendingAttachment.fileName}
               </p>
+              {pendingAttachment.type === "video" && (
+                <p className="text-[11px] text-white/50">
+                  {formatTimeLabel(
+                    previewVideoRef.current?.currentTime ??
+                      pendingAttachment.trimStartSec ??
+                      0
+                  )}
+                  {" / "}
+                  {formatTimeLabel(
+                    (pendingAttachment.trimEndSec ?? 0) -
+                      (pendingAttachment.trimStartSec ?? 0) || 0
+                  )}
+                </p>
+              )}
             </div>
             <div className="rounded-xl overflow-hidden border border-white/15 bg-black/70 max-h-[70vh] flex items-center justify-center">
               {pendingAttachment.type === "video" ? (
                 <video
+                  ref={previewVideoRef}
                   src={pendingAttachment.url}
-                  controls
                   autoPlay
+                  playsInline
+                  muted={false}
+                  onTimeUpdate={handlePreviewVideoTimeUpdate}
+                  onLoadedMetadata={(ev) => {
+                    const vid = ev.currentTarget;
+                    const start = pendingAttachment.trimStartSec ?? 0;
+                    try {
+                      vid.currentTime = start;
+                    } catch {
+                      // ignore
+                    }
+                  }}
                   className="w-full h-full max-h-[70vh] object-contain"
                 />
               ) : (
@@ -1360,15 +1519,19 @@ export default function ChatWindow() {
             </div>
             <div className="rounded-xl overflow-hidden border border-white/15 bg-black/70">
               <video
+                ref={trimVideoRef}
                 src={trimState.objectUrl}
                 controls
+                onTimeUpdate={handleTrimVideoTimeUpdate}
                 className="w-full max-h-[40vh] object-contain"
               />
             </div>
             <div className="space-y-3">
-              <div className="space-y-1">
+              <div className="space-y-2">
                 <div className="flex justify-between text-[11px] text-white/60">
-                  <span>Start time: {trimState.startSec.toFixed(1)}s</span>
+                  <span>
+                    Start: {trimState.startSec.toFixed(1)}s
+                  </span>
                   <span>
                     End:{" "}
                     {Math.min(
@@ -1378,37 +1541,62 @@ export default function ChatWindow() {
                     s
                   </span>
                 </div>
-                <input
-                  type="range"
-                  min={0}
-                  max={Math.max(
-                    0,
-                    trimState.duration - trimState.lengthSec
+                <div
+                  ref={trimTrackRef}
+                  className="relative h-10 rounded-full bg-white/8 overflow-hidden touch-none select-none"
+                >
+                  <div className="absolute inset-y-3 left-2 right-2 rounded-full bg-white/10" />
+                  {trimState.duration > 0 && (
+                    <>
+                      {(() => {
+                        const total = trimState.duration || 1;
+                        const endSec = Math.min(
+                          trimState.startSec + trimState.lengthSec,
+                          trimState.duration
+                        );
+                        const startPct =
+                          (trimState.startSec / total) * 100;
+                        const endPct = (endSec / total) * 100;
+                        const widthPct = Math.max(endPct - startPct, 2);
+                        return (
+                          <>
+                            <div
+                              className="absolute inset-y-2 rounded-full bg-primary/40 border border-primary/70"
+                              style={{
+                                left: `${startPct}%`,
+                                width: `${widthPct}%`,
+                              }}
+                            />
+                            <button
+                              type="button"
+                              onPointerDown={(ev) =>
+                                beginTrimDrag("start", ev)
+                              }
+                              className="absolute inset-y-1 -translate-x-1/2 flex items-center justify-center w-5"
+                              style={{ left: `${startPct}%` }}
+                            >
+                              <div className="h-6 w-1.5 rounded-full bg-white shadow-[0_0_6px_rgba(0,0,0,0.6)]" />
+                            </button>
+                            <button
+                              type="button"
+                              onPointerDown={(ev) =>
+                                beginTrimDrag("end", ev)
+                              }
+                              className="absolute inset-y-1 -translate-x-1/2 flex items-center justify-center w-5"
+                              style={{ left: `${endPct}%` }}
+                            >
+                              <div className="h-6 w-1.5 rounded-full bg-white shadow-[0_0_6px_rgba(0,0,0,0.6)]" />
+                            </button>
+                          </>
+                        );
+                      })()}
+                    </>
                   )}
-                  step={0.1}
-                  value={trimState.startSec}
-                  onChange={(e) =>
-                    handleTrimStartChange(parseFloat(e.target.value))
-                  }
-                  className="w-full accent-primary"
-                />
-              </div>
-              <div className="space-y-1">
-                <div className="flex justify-between text-[11px] text-white/60">
-                  <span>Clip length</span>
-                  <span>{trimState.lengthSec.toFixed(1)}s</span>
                 </div>
-                <input
-                  type="range"
-                  min={0.5}
-                  max={Math.min(4, trimState.duration)}
-                  step={0.1}
-                  value={trimState.lengthSec}
-                  onChange={(e) =>
-                    handleTrimLengthChange(parseFloat(e.target.value))
-                  }
-                  className="w-full accent-primary"
-                />
+                <p className="text-[11px] text-white/50">
+                  Drag the white handles to choose the part you want to send
+                  (max 4 seconds).
+                </p>
               </div>
             </div>
             <div className="flex justify-end gap-2 pt-1">
