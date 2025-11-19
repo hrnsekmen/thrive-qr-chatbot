@@ -194,6 +194,58 @@ export default function ChatWindow() {
     });
   }
 
+  function getPreferredRecorderConfig():
+    | { mimeType: string; extension: "mp4" | "webm" }
+    | { mimeType?: undefined; extension: "mp4" | "webm" } {
+    if (typeof window === "undefined") {
+      return { extension: "webm" };
+    }
+    const nav = window.navigator;
+    const ua = nav?.userAgent || "";
+    const isAppleDevice =
+      /iPad|iPhone|iPod/.test(ua) ||
+      (nav?.platform === "MacIntel" && (nav as any).maxTouchPoints > 1);
+
+    const MR: any = (window as any).MediaRecorder;
+    const canCheck = MR && typeof MR.isTypeSupported === "function";
+
+    if (isAppleDevice && canCheck) {
+      const appleCandidates = [
+        "video/mp4;codecs=avc1.42E01E,mp4a.40.2",
+        "video/mp4",
+      ];
+      for (const c of appleCandidates) {
+        try {
+          if (MR.isTypeSupported(c)) {
+            return { mimeType: c, extension: "mp4" };
+          }
+        } catch {
+          // ignore and fall back
+        }
+      }
+      return { extension: "mp4" };
+    }
+
+    if (canCheck) {
+      const webmCandidates = [
+        "video/webm;codecs=vp9,opus",
+        "video/webm;codecs=vp8,opus",
+        "video/webm",
+      ];
+      for (const c of webmCandidates) {
+        try {
+          if (MR.isTypeSupported(c)) {
+            return { mimeType: c, extension: "webm" };
+          }
+        } catch {
+          // ignore and continue
+        }
+      }
+    }
+
+    return { extension: "webm" };
+  }
+
   async function sendBinaryVideoOverWS(
     ws: WebSocket,
     file: File,
@@ -290,7 +342,20 @@ export default function ChatWindow() {
         return;
       }
 
-      const recorder = new MediaRecorder(stream);
+      const recConfig = getPreferredRecorderConfig();
+      let recorder: MediaRecorder;
+      try {
+        if (recConfig.mimeType) {
+          recorder = new MediaRecorder(stream, {
+            mimeType: recConfig.mimeType,
+          });
+        } else {
+          recorder = new MediaRecorder(stream);
+        }
+      } catch {
+        recorder = new MediaRecorder(stream);
+      }
+
       mediaRecorderRef.current = recorder;
       recordingChunksRef.current = [];
 
@@ -310,7 +375,9 @@ export default function ChatWindow() {
           return;
         }
 
-        const blob = new Blob(chunks, { type: "video/webm" });
+        const effectiveType =
+          recorder.mimeType || recConfig.mimeType || "video/webm";
+        const blob = new Blob(chunks, { type: effectiveType });
         const MAX_BYTES = 10 * 1024 * 1024;
         if (blob.size > MAX_BYTES) {
           openAlert(
@@ -321,9 +388,11 @@ export default function ChatWindow() {
           return;
         }
 
-        const fileName = `recorded-${Date.now()}.webm`;
+        const fileName = `recorded-${Date.now()}.${
+          recConfig.extension === "mp4" ? "mp4" : "webm"
+        }`;
         const file = new File([blob], fileName, {
-          type: blob.type || "video/webm",
+          type: blob.type || effectiveType,
         });
         const url = URL.createObjectURL(blob);
 
