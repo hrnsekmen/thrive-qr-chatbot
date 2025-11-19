@@ -22,6 +22,18 @@ type PendingAttachment = MessageAttachment & {
   file: File;
 };
 
+type AlertState =
+  | {
+      kind: "alert";
+      title?: string;
+      message: string;
+    }
+  | {
+      kind: "camera-choice";
+      title?: string;
+      message: string;
+    };
+
 type MessageBubbleProps = {
   msg: Message;
   isLast: boolean;
@@ -95,6 +107,10 @@ export default function ChatWindow() {
   const [pendingAttachment, setPendingAttachment] =
     useState<PendingAttachment | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const photoInputRef = useRef<HTMLInputElement | null>(null);
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
+  const [alertState, setAlertState] = useState<AlertState | null>(null);
+  const [isCameraOpen, setIsCameraOpen] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [recordingError, setRecordingError] = useState<string | null>(null);
   const recordingVideoRef = useRef<HTMLVideoElement | null>(null);
@@ -208,6 +224,14 @@ export default function ChatWindow() {
     ws.send(buffer);
   }
 
+  function openAlert(message: string, title?: string) {
+    setAlertState({ kind: "alert", message, title });
+  }
+
+  function closeAlert() {
+    setAlertState(null);
+  }
+
   function stopAndCleanupRecording() {
     if (recordingTimeoutRef.current !== null) {
       window.clearTimeout(recordingTimeoutRef.current);
@@ -221,9 +245,11 @@ export default function ChatWindow() {
     if (videoEl) {
       videoEl.srcObject = null;
     }
+    setIsRecording(false);
+    setIsCameraOpen(false);
   }
 
-  async function startCustomVideoRecording() {
+  async function openCameraPreview() {
     setRecordingError(null);
     if (
       typeof navigator === "undefined" ||
@@ -240,15 +266,28 @@ export default function ChatWindow() {
         audio: true,
       });
       mediaStreamRef.current = stream;
+      setIsCameraOpen(true);
+      setIsRecording(false);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error("Camera access failed:", err);
+      stopAndCleanupRecording();
+      setRecordingError("Could not access the camera. Please check permissions.");
+    }
+  }
 
-      const videoEl = recordingVideoRef.current;
-      if (videoEl) {
-        videoEl.srcObject = stream;
-        try {
-          await videoEl.play();
-        } catch {
-          // ignore
-        }
+  async function startCustomVideoRecording() {
+    setRecordingError(null);
+    if (!mediaStreamRef.current) {
+      await openCameraPreview();
+      if (!mediaStreamRef.current) return;
+    }
+
+    try {
+      const stream = mediaStreamRef.current;
+      if (!stream) {
+        setRecordingError("Camera stream is not available.");
+        return;
       }
 
       const recorder = new MediaRecorder(stream);
@@ -274,9 +313,9 @@ export default function ChatWindow() {
         const blob = new Blob(chunks, { type: "video/webm" });
         const MAX_BYTES = 10 * 1024 * 1024;
         if (blob.size > MAX_BYTES) {
-          // eslint-disable-next-line no-alert
-          alert(
-            "Recorded video exceeds the 10MB limit. Please record a shorter or lower-resolution video."
+          openAlert(
+            "Recorded video exceeds the 10MB limit. Please record a shorter or lower-resolution video.",
+            "Video too large"
           );
           setIsRecording(false);
           return;
@@ -296,38 +335,69 @@ export default function ChatWindow() {
               // ignore
             }
           }
-          return {
+          const next: PendingAttachment = {
             type: "video",
             url,
             fileName,
             file,
           };
+          setIsPreviewOpen(true);
+          return next;
         });
         setIsRecording(false);
       };
 
       recorder.start();
       setIsRecording(true);
+      setIsCameraOpen(true);
 
       if (recordingTimeoutRef.current !== null) {
         window.clearTimeout(recordingTimeoutRef.current);
       }
+      // Use a small safety buffer above 4s to compensate for
+      // scheduling/encoding overhead so the actual clip duration
+      // is as close as possible to 4 seconds (not ~3s).
+      const AUTO_STOP_MS = 4300;
       recordingTimeoutRef.current = window.setTimeout(() => {
-        if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
+        if (
+          mediaRecorderRef.current &&
+          mediaRecorderRef.current.state === "recording"
+        ) {
           try {
             mediaRecorderRef.current.stop();
           } catch {
             // ignore
           }
         }
-      }, 4000);
+      }, AUTO_STOP_MS);
     } catch (err) {
       // eslint-disable-next-line no-console
       console.error("Camera access failed:", err);
       stopAndCleanupRecording();
-      setIsRecording(false);
       setRecordingError("Could not access the camera. Please check permissions.");
     }
+  }
+
+  function handleStopRecording() {
+    if (
+      mediaRecorderRef.current &&
+      mediaRecorderRef.current.state === "recording"
+    ) {
+      try {
+        mediaRecorderRef.current.stop();
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  function handleCloseCamera() {
+    if (isRecording) {
+      handleStopRecording();
+      return;
+    }
+    stopAndCleanupRecording();
+    setIsCameraOpen(false);
   }
 
   function getVideoDuration(url: string): Promise<number> {
@@ -472,14 +542,13 @@ export default function ChatWindow() {
       "MediaRecorder" in window;
 
     if (canUseCustomRecorder) {
-      // eslint-disable-next-line no-alert
-      const useRecorder = window.confirm(
-        "Do you want to record a new video? (Maximum 4 seconds)\nPress Cancel to choose from your gallery instead."
-      );
-      if (useRecorder) {
-        void startCustomVideoRecording();
-        return;
-      }
+      setAlertState({
+        kind: "camera-choice",
+        title: "Add media",
+        message:
+          "How would you like to add media? You can take a photo, record a short video (maximum 4 seconds) or upload from your gallery.",
+      });
+      return;
     }
 
     // Fallback: use classic file picker (gallery / system camera)
@@ -500,8 +569,10 @@ export default function ChatWindow() {
     // Size limit: 10MB
     const MAX_BYTES = 10 * 1024 * 1024;
     if (file.size > MAX_BYTES) {
-      // eslint-disable-next-line no-alert
-      alert("Maximum file size is 10MB. Please select a smaller file.");
+      openAlert(
+        "Maximum file size is 10MB. Please select a smaller file.",
+        "File too large"
+      );
       e.target.value = "";
       return;
     }
@@ -522,8 +593,10 @@ export default function ChatWindow() {
       try {
         const duration = await getVideoDuration(objectUrl);
         if (duration > 4) {
-          // eslint-disable-next-line no-alert
-          alert("Video en fazla 4 saniye olabilir.");
+          openAlert(
+            "Video is too long. Maximum allowed duration is 4 seconds.",
+            "Video too long"
+          );
           URL.revokeObjectURL(objectUrl);
           e.target.value = "";
           return;
@@ -543,6 +616,9 @@ export default function ChatWindow() {
       fileName: file.name,
       file,
     });
+
+    // Open preview immediately after selecting media
+    setIsPreviewOpen(true);
 
     // File is only kept in pending state; it is sent to backend during send.
     e.target.value = "";
@@ -584,6 +660,22 @@ export default function ChatWindow() {
       vv.removeEventListener("resize", onResize);
     };
   }, []);
+
+  // Keep recording preview video element in sync with active camera stream
+  useEffect(() => {
+    if (!isCameraOpen && !isRecording) return;
+    const stream = mediaStreamRef.current;
+    if (!stream) return;
+    const videoEl = recordingVideoRef.current;
+    if (!videoEl) return;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (videoEl as any).srcObject = stream;
+      void videoEl.play();
+    } catch {
+      // ignore play/srcObject errors
+    }
+  }, [isCameraOpen, isRecording]);
 
   function handleFocus() {
     keyboardOpen.current = true;
@@ -770,11 +862,15 @@ export default function ChatWindow() {
         onSubmit={handleSend}
         className="px-4 md:px-6 py-3 sm:py-4 border-t border-white/10 bg-[#121213] space-y-2"
       >
-        {isRecording && (
+        {(isCameraOpen || isRecording) && (
           <div className="space-y-2">
             <div className="flex items-center gap-2 text-xs text-red-400">
               <span className="h-2 w-2 rounded-full bg-red-500 animate-pulse" />
-              <span>Video kaydediliyor… (maksimum 4 saniye)</span>
+              <span>
+                {isRecording
+                  ? "Recording video… (maximum 4 seconds)"
+                  : "Camera is ready – tap Record to start."}
+              </span>
             </div>
             <div className="w-full rounded-xl overflow-hidden border border-red-500/40 bg-black/60">
               <video
@@ -784,6 +880,32 @@ export default function ChatWindow() {
                 autoPlay
                 playsInline
               />
+            </div>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={handleCloseCamera}
+                className="px-3 py-1.5 rounded-full border border-white/20 text-[11px] text-white/70 hover:text-white hover:bg-white/5"
+              >
+                Close camera
+              </button>
+              {isRecording ? (
+                <button
+                  type="button"
+                  onClick={handleStopRecording}
+                  className="px-3 py-1.5 rounded-full bg-primary text-[11px] text-white hover:bg-primary/90"
+                >
+                  Stop recording
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => void startCustomVideoRecording()}
+                  className="px-3 py-1.5 rounded-full bg-primary text-[11px] text-white hover:bg-primary/90"
+                >
+                  Record
+                </button>
+              )}
             </div>
           </div>
         )}
@@ -812,22 +934,32 @@ export default function ChatWindow() {
               <p className="text-xs text-white/70 truncate">
                 {pendingAttachment.fileName}
               </p>
-              <button
-                type="button"
-                onClick={() => {
-                  if (pendingAttachment?.url) {
-                    try {
-                      URL.revokeObjectURL(pendingAttachment.url);
-                    } catch {
-                      // ignore
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsPreviewOpen(true)}
+                  className="text-[11px] text-white/70 hover:text-white px-2 py-1 rounded-full border border-white/25"
+                >
+                  Preview
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (pendingAttachment?.url) {
+                      try {
+                        URL.revokeObjectURL(pendingAttachment.url);
+                      } catch {
+                        // ignore
+                      }
                     }
-                  }
-                  setPendingAttachment(null);
-                }}
-                className="text-[11px] text-white/60 hover:text-white/90 px-2 py-1 rounded-full border border-white/20"
-              >
-                Remove
-              </button>
+                    setPendingAttachment(null);
+                    setIsPreviewOpen(false);
+                  }}
+                  className="text-[11px] text-white/60 hover:text-white/90 px-2 py-1 rounded-full border border-white/20"
+                >
+                  Remove
+                </button>
+              </div>
             </div>
           </div>
         )}
@@ -877,6 +1009,14 @@ export default function ChatWindow() {
             onChange={handleMediaSelected}
           />
           <input
+            ref={photoInputRef}
+            type="file"
+            accept="image/*"
+            capture="environment"
+            className="hidden"
+            onChange={handleMediaSelected}
+          />
+          <input
             value={input}
             onChange={(e) => setInput(e.target.value)}
             placeholder="Type your message…"
@@ -897,6 +1037,101 @@ export default function ChatWindow() {
           </button>
         </div>
       </form>
+      {isPreviewOpen && pendingAttachment && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/70 px-4">
+          <div className="w-full max-w-md sm:max-w-lg md:max-w-2xl rounded-2xl bg-[#111112] border border-white/15 shadow-2xl p-4 sm:p-6 space-y-4 relative">
+            <button
+              type="button"
+              onClick={() => setIsPreviewOpen(false)}
+              className="absolute right-3 top-3 text-white/70 hover:text-white text-sm"
+              aria-label="Close preview"
+            >
+              ✕
+            </button>
+            <div className="space-y-1 pr-6">
+              <p className="text-xs font-semibold text-white/70 uppercase tracking-wide">
+                {pendingAttachment.type === "video" ? "Video preview" : "Photo preview"}
+              </p>
+              <p className="text-xs text-white/60 truncate">
+                {pendingAttachment.fileName}
+              </p>
+            </div>
+            <div className="rounded-xl overflow-hidden border border-white/15 bg-black/70 max-h-[70vh] flex items-center justify-center">
+              {pendingAttachment.type === "video" ? (
+                <video
+                  src={pendingAttachment.url}
+                  controls
+                  autoPlay
+                  playsInline
+                  className="w-full h-full max-h-[70vh] object-contain"
+                />
+              ) : (
+                <img
+                  src={pendingAttachment.url}
+                  alt={pendingAttachment.fileName || "Captured photo"}
+                  className="w-full h-full max-h-[70vh] object-contain"
+                />
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+      {alertState && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
+          <div className="w-full max-w-sm rounded-2xl bg-[#111112] border border-white/15 shadow-2xl p-5 space-y-4">
+            {alertState.title && (
+              <h3 className="text-sm font-semibold text-white">
+                {alertState.title}
+              </h3>
+            )}
+            <p className="text-sm text-white/80">{alertState.message}</p>
+            <div className="flex justify-end gap-2">
+              {alertState.kind === "camera-choice" ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      photoInputRef.current?.click();
+                      closeAlert();
+                    }}
+                    className="px-4 py-1.5 rounded-full border border-white/25 text-sm text-white/80 hover:bg-white/5"
+                  >
+                    Take a photo
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void openCameraPreview();
+                      closeAlert();
+                    }}
+                    className="px-4 py-1.5 rounded-full bg-primary text-sm text-white hover:bg-primary/90"
+                  >
+                    Record video
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      fileInputRef.current?.click();
+                      closeAlert();
+                    }}
+                    className="px-4 py-1.5 rounded-full border border-white/25 text-sm text-white/80 hover:bg-white/5"
+                  >
+                    Upload from gallery
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  onClick={closeAlert}
+                  className="px-4 py-1.5 rounded-full bg-primary text-sm text-white hover:bg-primary/90"
+                >
+                  OK
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
