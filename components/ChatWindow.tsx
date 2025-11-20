@@ -542,7 +542,7 @@ export default function ChatWindow() {
 
     const basePayload = {
       activity_id: getActivityIdFromUrl(),
-      session_id: null,
+      session_id: session?.session_id ?? null,
       message: text,
       time: new Date().toISOString(),
       user_meta: userMeta,

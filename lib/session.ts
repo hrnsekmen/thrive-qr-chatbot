@@ -1,4 +1,5 @@
 export type UserSession = {
+  session_id: string;
   name: string;
   email: string;
   createdAt: number;
@@ -56,9 +57,19 @@ export function loadSession(): UserSession | null {
       const raw = window.localStorage.getItem(key);
       if (!raw) continue;
       const parsed = JSON.parse(raw) as UserSession;
-      // Migrate legacy to stable if needed
+
+      // Ensure session_id exists (migration for existing users)
+      if (!parsed.session_id) {
+        parsed.session_id = crypto.randomUUID();
+        // We will save this updated version back below
+      }
+
+      // Migrate legacy to stable if needed, or just update if session_id was added
       if (stableKey && key !== stableKey) {
-        window.localStorage.setItem(stableKey, raw);
+        window.localStorage.setItem(stableKey, JSON.stringify(parsed));
+      } else if (!JSON.parse(raw).session_id) {
+        // If we strictly just added session_id in place
+        window.localStorage.setItem(key, JSON.stringify(parsed));
       }
       return parsed;
     }

@@ -109,6 +109,7 @@ export default function WelcomeForm() {
       return;
     }
     const session: UserSession = {
+      session_id: crypto.randomUUID(),
       name: name.trim(),
       email: email.trim(),
       createdAt: Date.now(),
