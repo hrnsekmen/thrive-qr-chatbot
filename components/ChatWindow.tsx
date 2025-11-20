@@ -947,10 +947,10 @@ export default function ChatWindow() {
                   : "Camera is ready – tap Record to start."}
               </span>
             </div>
-            <div className="w-full rounded-xl overflow-hidden border border-red-500/40 bg-black/60">
+            <div className="w-full rounded-xl overflow-hidden border border-red-500/40 bg-black">
               <video
                 ref={recordingVideoRef}
-                className="w-full h-40 object-contain"
+                className="w-full h-48 object-cover"
                 muted
                 autoPlay
                 playsInline
