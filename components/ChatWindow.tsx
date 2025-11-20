@@ -327,10 +327,24 @@ export default function ChatWindow() {
       setIsCameraOpen(true);
       setIsRecording(false);
     } catch (err) {
-      // eslint-disable-next-line no-console
-      console.error("Camera access failed:", err);
-      stopAndCleanupRecording();
-      setRecordingError("Could not access the camera. Please check permissions.");
+      // Try again without audio (microphone permission might be denied)
+      try {
+        // eslint-disable-next-line no-console
+        console.warn("Camera+Audio access failed, trying video only:", err);
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: "environment" } },
+          audio: false,
+        });
+        mediaStreamRef.current = stream;
+        setIsCameraOpen(true);
+        setIsRecording(false);
+        // Optionally warn user that audio is disabled?
+      } catch (err2) {
+        // eslint-disable-next-line no-console
+        console.error("Camera access failed:", err2);
+        stopAndCleanupRecording();
+        setRecordingError("Could not access the camera. Please check permissions.");
+      }
     }
   }
 
@@ -1006,16 +1020,20 @@ export default function ChatWindow() {
               )}
             </div>
             <div className="flex-1 min-w-0 flex items-center justify-between gap-2">
-              <p className="text-xs text-white/70 truncate">
+              <p className="text-xs text-white/70 truncate pr-1">
                 {pendingAttachment.fileName}
               </p>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-shrink-0">
                 <button
                   type="button"
                   onClick={() => setIsPreviewOpen(true)}
-                  className="text-[11px] text-white/70 hover:text-white px-2 py-1 rounded-full border border-white/25"
+                  className="flex items-center justify-center h-8 w-8 rounded-full border border-white/25 text-white/70 hover:text-white hover:bg-white/5"
+                  aria-label="Preview"
                 >
-                  Preview
+                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                     <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                     <circle cx="12" cy="12" r="3"></circle>
+                   </svg>
                 </button>
                 <button
                   type="button"
@@ -1030,9 +1048,13 @@ export default function ChatWindow() {
                     setPendingAttachment(null);
                     setIsPreviewOpen(false);
                   }}
-                  className="text-[11px] text-white/60 hover:text-white/90 px-2 py-1 rounded-full border border-white/20"
+                  className="flex items-center justify-center h-8 w-8 rounded-full border border-white/20 text-white/60 hover:text-white/90 hover:bg-white/5"
+                  aria-label="Remove"
                 >
-                  Remove
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                  </svg>
                 </button>
               </div>
             </div>
