@@ -1021,7 +1021,9 @@ export default function ChatWindow() {
             </div>
             <div className="flex-1 min-w-0 flex items-center justify-between gap-2 overflow-hidden">
               <p className="text-xs text-white/70 truncate pr-1">
-                {pendingAttachment.fileName}
+                {pendingAttachment.fileName.length > 12
+                  ? pendingAttachment.fileName.substring(0, 12) + "…"
+                  : pendingAttachment.fileName}
               </p>
               <div className="flex items-center gap-2 flex-shrink-0">
                 <button
